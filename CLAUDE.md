@@ -221,3 +221,79 @@ CLAUDE.md      This file
    printed to chat.
 6. **Ask, don't guess** on anything ambiguous — a wrong assumption compounds
    across phases faster than a clarifying question would cost.
+
+---
+
+## 9. Current implementation state (living section — update as work progresses)
+
+This section tracks decisions and progress made during actual implementation,
+as a supplement to the spec above. Sections 0–8 are the original plan and
+should stay as the source of truth for intent; this section is where we
+record what's actually been built and any environment-specific gotchas
+discovered along the way.
+
+**Repo**: `github.com/krisha06/styling-assistant`. Work happens on branch
+`1-core-application` for all of Phase 1.
+
+**Expo SDK is pinned to 54, not the newest available.** As of mid-2026, the
+iOS App Store build of Expo Go is capped at SDK 54 — SDK 55+ has been stuck
+in Apple App Store review with no ETA (see Expo's own changelog:
+expo.dev/changelog/expo-go-and-app-store-may-2026). Installing the "latest"
+`expo` package (57 at time of writing) will silently produce a project that
+Expo Go on a physical iOS device rejects with "Project is incompatible with
+this version of Expo Go" / "requires a newer version of Expo Go" — that
+error is misleading; the fix is to *downgrade* the project to match Expo
+Go's actual App Store SDK cap, not to update Expo Go (it's already current).
+**Do not bump the `expo` package version without checking current Expo
+Go/App Store SDK support first.**
+
+- Swipe UI decision from section 2's either/or: **`react-native-deck-swiper`**
+  (over custom `PanResponder`) — used for onboarding, and will be reused for
+  recommendation like/pass.
+- Mobile app scaffolded via `create-expo-app` (expo-router, TypeScript). The
+  default demo template (tab bar, `explore.tsx`, `app-tabs.tsx` and the
+  components only they used) has been removed and replaced with a `Stack`
+  layout in `src/app/_layout.tsx`, since the real app flow is linear
+  (onboarding → upload → loading → recommendations), not tabbed.
+- Onboarding swipe screen built at `mobile/src/app/onboarding.tsx`, gated by
+  a local AsyncStorage flag (`mobile/src/services/onboarding-status.ts`) so
+  it only shows once — this is a local-only stand-in until Phase 2 auth
+  exists; it is not the permanent mechanism described in section 4.
+- Per working rule #2, onboarding is currently wired against a **mock**
+  API layer (`mobile/src/services/api.ts` + `mobile/src/data/onboarding-deck.ts`)
+  standing in for `POST /api/onboarding-deck` and `POST /api/onboarding-swipe`
+  from section 3, using placeholder (picsum) images. No backend exists yet.
+  Images are intentionally left as placeholders for now — swap for a real
+  curated outfit-photo set once the backend/onboarding-deck endpoint exists,
+  rather than doing the swap twice.
+- `/backend` FastAPI skeleton has not been started yet. **This is the next
+  task** (mocked endpoints first, per working rule #2 and the Half A/Half B
+  build order agreed on for Phase 1).
+
+**`react-native-deck-swiper` gotcha (cost real debugging time — read before
+touching `onboarding.tsx` again):**
+- The library sizes cards off `Dimensions.get('window')` (the full device
+  screen height), not off its actual parent container's measured size. If
+  you nest it below a header inside a normal flex column, the cards will
+  always be too tall and overflow past the bottom of the screen — the
+  `marginTop`/`marginBottom`/`cardVerticalMargin` props are the only way to
+  compensate, and they only work correctly if the `<Swiper>` itself fills
+  the *entire* screen (i.e. render any header as an absolutely-positioned
+  overlay on top of it, not as a flex sibling that eats real layout space).
+- Its `shouldComponentUpdate` is hardcoded to only check the `cards` and
+  `cardIndex` props (plus a few internal state fields) — it **silently
+  ignores** changes to `marginTop`/`marginBottom`/`cardVerticalMargin`, so
+  recomputing those from a measured value (e.g. header height via
+  `onLayout`) won't actually update the rendered card size unless you force
+  a remount, e.g. `key={headerHeight}` on the `<Swiper>`.
+- Current working implementation of both fixes lives in
+  `mobile/src/app/onboarding.tsx` — treat that file as the reference pattern
+  if `react-native-deck-swiper` is reused for the recommendation
+  like/pass screen later (section 6, screen 4).
+
+**Uncommitted at end of this session** — all of the onboarding screen work,
+the SDK 54 downgrade, and the `app.json`/`use-theme.ts`/`animated-icon.tsx`
+fixes described above are sitting as uncommitted changes on branch
+`1-core-application`. Nothing has been committed since the initial scaffold
+commit (`f4531cf`). Commit these before starting the backend skeleton so
+the working tree doesn't mix two unrelated pieces of work in one commit.
