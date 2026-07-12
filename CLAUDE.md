@@ -291,9 +291,7 @@ touching `onboarding.tsx` again):**
   if `react-native-deck-swiper` is reused for the recommendation
   like/pass screen later (section 6, screen 4).
 
-**Uncommitted at end of this session** — all of the onboarding screen work,
-the SDK 54 downgrade, and the `app.json`/`use-theme.ts`/`animated-icon.tsx`
-fixes described above are sitting as uncommitted changes on branch
-`1-core-application`. Nothing has been committed since the initial scaffold
-commit (`f4531cf`). Commit these before starting the backend skeleton so
-the working tree doesn't mix two unrelated pieces of work in one commit.
+All of the onboarding screen work, the SDK 54 downgrade, and the
+`app.json`/`use-theme.ts`/`animated-icon.tsx` fixes described above are
+committed (`b626fd5`, "Build onboarding swipe screen; downgrade to Expo
+SDK 54") and pushed to `origin/1-core-application`.
