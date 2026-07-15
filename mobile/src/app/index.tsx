@@ -1,11 +1,11 @@
 import { Redirect } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator } from 'react-native';
+import { ActivityIndicator, Pressable } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
-import { getHasOnboarded } from '@/services/onboarding-status';
+import { getHasOnboarded, resetHasOnboarded } from '@/services/onboarding-status';
 
 export default function HomeScreen() {
   const [hasOnboarded, setHasOnboarded] = useState<boolean | null>(null);
@@ -33,6 +33,18 @@ export default function HomeScreen() {
       <ThemedText type="small" themeColor="textSecondary">
         Upload screen goes here next
       </ThemedText>
+      {__DEV__ && (
+        <Pressable
+          onPress={async () => {
+            await resetHasOnboarded();
+            setHasOnboarded(false);
+          }}
+          style={{ marginTop: Spacing.four }}>
+          <ThemedText type="small" themeColor="textSecondary">
+            [dev] Reset onboarding
+          </ThemedText>
+        </Pressable>
+      )}
     </ThemedView>
   );
 }

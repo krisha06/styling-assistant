@@ -41,6 +41,18 @@ needed elsewhere in the pipeline) are the whole mechanism:
    each by cosine similarity to the user's preference vector and prefer
    closer matches.
 
+**Amendment (Phase 1 build, see section 9 for full detail):** onboarding
+now also asks two explicit self-select questions — preferred style
+archetype(s) and age range — immediately before the swipe deck, to bias
+which images from the curated pool a given user sees. This still respects
+the "fixed/curated set, not dynamically generated" rule above: the
+underlying image pool itself is static (sourced once, offline); only
+client-side filtering of that fixed pool is personalized per user. Added
+because a single generic deck poorly serves a broad user base (e.g. a
+20-year-old and a 60-year-old shouldn't see the same deck); explicit
+self-select, rather than inferring from other data, keeps with the same
+never-assume-about-the-user spirit as the rest of this app.
+
 Standard content-based recommendation pattern. Less infrastructure than
 Teachable Machine, not more — no training tool, no exported model files,
 just embeddings already being generated plus one row per user.
@@ -73,13 +85,19 @@ installing or introducing it.
 
 ```
 POST /api/onboarding-deck
-  → { deck: [{ image_id: string, image_url: string }] }   // 15-20 items
+  → { deck: [{ image_id: string, image_url: string, tags: string[] }] }
+  // Real, implemented — see section 9. Backend holds a larger fixed pool
+  // (~90+ images spanning style + age tags); the mobile app self-selects
+  // style/age first, then client-side filters this response down to a
+  // ~16-card session deck. Not a request param on this endpoint.
 
 POST /api/onboarding-swipe
   body: { user_id: string, image_id: string, liked: boolean }
   → { status: "ok" }
   // Embeds the image (or uses a precomputed embedding) and folds it into
   // the user's preference vector.
+  // STUBBED as of section 9's latest update — validates + logs only, no
+  // real CLIP call or vector math yet.
 
 POST /api/analyze-item
   body: multipart/form-data, field "image"
@@ -107,6 +125,11 @@ POST /api/recommendation-feedback
 Field names for the Google Images provider (`image_url`, `source`, etc.) are
 best guesses — confirm against a live test call before building ranking
 logic around them, and flag if the real response differs from this.
+**Partially confirmed** (section 9): the onboarding-deck curation script
+confirmed SerpApi's real `google_images` field names —
+`images_results[].original` for the direct image URL, `.link` for the
+source page — but `/api/build-recommendations`'s own use of this provider
+is still unverified live.
 
 ---
 
@@ -114,8 +137,11 @@ logic around them, and flag if the real response differs from this.
 
 **Phase 1 — swipe onboarding + core recommendation loop (target: end of June)**
 - Anonymous auth on first launch.
-- Onboarding swipe deck (fixed set of 15–20 images), builds initial
-  preference vector.
+- Onboarding swipe deck: a fixed, curated pool of images (auto-sourced once
+  via SerpApi, not hand-picked or dynamically queried per session — see
+  section 9), narrowed to a ~16-card session deck via an explicit
+  style-archetype + age-range self-select step before swiping. Builds
+  initial preference vector.
 - Upload/take photo → CLIP embedding → LLM generates 3–4 concepts → Google
   Images pulls reference images per concept, ranked by similarity to the
   user's preference vector → recommendations shown with image + description.
@@ -180,7 +206,9 @@ UI polish. Phase 1 cannot be cut — it's the entire product.
 
 ## 6. Mobile app screens
 
-1. **Onboarding swipe screen** — first launch only.
+1. **Onboarding swipe screen** — first launch only. Actually three
+   sub-steps: style-archetype self-select → age-range self-select → swipe
+   deck (see section 9).
 2. **Upload screen** — camera/library picker, single CTA.
 3. **Loading screen** — three-stage progress (Identifying the piece →
    Generating outfit ideas → Finding references).
@@ -295,3 +323,126 @@ All of the onboarding screen work, the SDK 54 downgrade, and the
 `app.json`/`use-theme.ts`/`animated-icon.tsx` fixes described above are
 committed (`b626fd5`, "Build onboarding swipe screen; downgrade to Expo
 SDK 54") and pushed to `origin/1-core-application`.
+
+---
+
+**`/backend` now exists** (the line above said "this is the next task" as of
+the last update — this block covers that work). Minimal FastAPI app:
+`main.py` (app + dev CORS + `/health`), `routes/onboarding.py`,
+`services/onboarding_deck.py`. Only the onboarding endpoints are built —
+`/api/analyze-item`, `/api/generate-concepts`, and
+`/api/build-recommendations` from section 3 are still unbuilt, deliberately
+out of scope for this pass.
+
+- `POST /api/onboarding-deck` is real — serves the curated pool from
+  `services/onboarding_deck.json`.
+- `POST /api/onboarding-swipe` is still a **stub** — validates the payload
+  and logs, but does not call CLIP or touch a preference vector (no
+  Supabase yet either). Marked with a `TODO(real-CLIP-integration)` comment
+  in `routes/onboarding.py`, grep-able when that work starts.
+
+**Curated onboarding image pool — sourced automatically, not hand-picked.**
+Rather than hand-curating ~15-20 photos (impractical to do well across
+demographics), `backend/scripts/fetch_onboarding_images.py` is a one-time,
+manually-run script that queries SerpApi's Google Images engine once per
+tag and writes the results to `services/onboarding_deck.json`. Re-run any
+time to refresh the pool — it fully re-fetches everything, not
+incrementally, so each run costs one SerpApi search per tag against your
+account's quota.
+
+- 16 tags total: 12 style archetypes (`classic-timeless`, `quiet-luxury`,
+  `preppy`, `workwear`, `cozy-casual`, `minimalist`, `athleisure`,
+  `streetwear`, `colorful-maximalist`, `eclectic-vintage`, `romantic`,
+  `boho`) + 4 age ranges (`under-25`, `25-40`, `40-60`, `60-plus`) — the
+  latter tagged separately from style, not crossed with it. Current pool:
+  94 images (~6 per tag).
+- Age tagging is a **best-effort proxy via search-query phrasing only**
+  (e.g. "senior style outfit over 60") — Google Images has no real
+  demographic filter, so results aren't guaranteed to actually depict
+  someone in that age range. Known limitation, not a bug — revisit if a
+  better source/method comes up later; the script is fully decoupled from
+  the rest of the app, so swapping it out only touches this one file.
+- **Resolves section 3's "best guess" flag on SerpApi's response shape**:
+  confirmed live — results are under `images_results`, each item's direct
+  image URL is `.original` (not `.image_url`), source page is `.link`.
+- Three real quality problems surfaced and fixed while building this — read
+  before re-running or modifying the script:
+  1. Plain `"<tag> outfit"` queries returned a lot of unusable results:
+     Pinterest "collage card" graphics (dozens of cut-out people composited
+     onto a flat background with a big caption) and magazine multi-celebrity
+     cutout grids, not real single-shot photos. Fixed by appending
+     `"street style photo -pinterest -collage -site:pinterest.com"` to every
+     query plus Google's `tbs=itp:photo` filter.
+  2. `-site:pinterest.com` only excludes results whose *source page* is
+     pinterest.com — it does **not** block images served from Pinterest's
+     image CDN (`pinimg.com`) via other source pages, so collage-style
+     images were still slipping through. Fixed by blocking the `pinimg.com`
+     host directly (`BLOCKED_URL_SUBSTRINGS` in the script).
+  3. ~4% of URLs from a live SerpApi response were actually dead on
+     arrival — TikTok's internal image API (`tiktok.com/api/img`, 403
+     without a session) and Facebook/Instagram's SEO-crawler placeholder
+     domains (`lookaside.instagram.com`, `lookaside.fbsbx.com`, return HTML
+     not an image) — these render as a blank/black swipe card in the app.
+     Fixed by live-validating every candidate URL (real HTTP GET +
+     content-type check) before writing it to the deck, in addition to
+     blocking the known-bad domains outright.
+
+**Onboarding flow now has a self-select pre-filter, not just a swipe deck**
+(amends section 1 point 1 and section 6 screen 1 — see the amendment notes
+there). `mobile/src/app/onboarding.tsx` is now a 3-stage local state
+machine: `select-style` → `select-age` → `swiping`.
+
+- `mobile/src/data/style-buckets.ts`: 4 UI-facing buckets (Classic &
+  Polished, Casual & Cozy, Bold & Street, Romantic & Boho) each mapping to
+  2-4 of the fine-grained style tags above, plus a "Not sure — show me a
+  mix" skip. User picks up to 2 buckets.
+- `mobile/src/data/age-ranges.ts`: the 4 age tags above as UI labels, plus a
+  "Prefer not to say" skip.
+- `buildSwipeDeck()` in `onboarding.tsx` does the actual personalization —
+  pure client-side filtering of the already-fetched pool, no new backend
+  endpoint or params: cards matching both the selected style tags and the
+  selected age tag score highest, cards matching just one score next, the
+  rest backfill up to a ~16-card session deck for variety. Never a fully
+  monotonous deck even with a narrow bucket+age combo.
+- This deliberately stops short of a fancier version discussed and rejected
+  for now (live per-session dynamic image fetching, two-round
+  CLIP-centroid + pgvector refinement) — that needs real CLIP and Supabase
+  wired in first, neither of which exists yet. Revisit as a Phase 3-style
+  enhancement once the Phase 1 core loop (real CLIP embedding + preference
+  vector) is actually built.
+
+**Mock API layer fully replaced with real backend calls.**
+`mobile/src/data/onboarding-deck.ts` (the picsum-placeholder mock) is
+deleted. `mobile/src/services/api.ts` now makes real `fetch` calls to
+`/api/onboarding-deck` and `/api/onboarding-swipe`, with the backend base
+URL auto-detected from `Constants.expoConfig.hostUri` (the same LAN host
+Expo Go already resolves to load the JS bundle), overridable via
+`EXPO_PUBLIC_API_BASE_URL`. New `mobile/src/services/anonymous-user.ts`
+generates and persists a local random user id (AsyncStorage) — a temporary
+stand-in for the `user_id` the swipe contract needs, since Phase 1
+anonymous Supabase auth isn't built yet. Uses `expo-crypto`'s
+`Crypto.randomUUID()`, **not** the bare `crypto.randomUUID()` global —
+verified this RN 0.81.5/Expo setup doesn't polyfill Web Crypto, so the bare
+global throws at runtime.
+
+**Dev-only onboarding reset.** `mobile/src/app/index.tsx`'s placeholder
+home screen has a `__DEV__`-only "[dev] Reset onboarding" link (calls the
+new `resetHasOnboarded()` in `onboarding-status.ts`) so onboarding can be
+re-tested without reinstalling the app. Won't ship to production builds.
+
+**Second `react-native-deck-swiper` gotcha** (in addition to the
+sizing/remount one above): its `onSwipedAll` completion callback has a
+timing race right at the last card — sometimes fires late or not at all,
+leaving an empty stack visible instead of navigating away. Worked around in
+`onboarding.tsx`'s `handleSwipe` by detecting the last card ourselves
+(`cardIndex === deck.length - 1`) and finishing immediately, with
+`onSwipedAll` kept only as a guarded fallback (a `finished` ref prevents
+double-firing). Apply the same pattern if this library is reused for the
+recommendation like/pass screen (section 6, screen 4).
+
+**Image load failures now degrade gracefully.** Since onboarding images are
+hotlinked from arbitrary external sites, some link rot over time is
+inevitable even with the validation above. `onboarding.tsx` now has a
+`SwipeCard` component with an `onError` handler on the `expo-image` — a
+failed load shows a labeled "Image unavailable" placeholder instead of a
+blank card.

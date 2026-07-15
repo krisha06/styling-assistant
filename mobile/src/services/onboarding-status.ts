@@ -13,3 +13,9 @@ export async function getHasOnboarded(): Promise<boolean> {
 export async function setHasOnboarded(): Promise<void> {
   await AsyncStorage.setItem(HAS_ONBOARDED_KEY, 'true');
 }
+
+// Dev-only convenience for re-testing the onboarding flow — see the reset
+// button on the placeholder home screen (index.tsx), guarded by __DEV__.
+export async function resetHasOnboarded(): Promise<void> {
+  await AsyncStorage.removeItem(HAS_ONBOARDED_KEY);
+}
