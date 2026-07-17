@@ -5,16 +5,23 @@ It contains the full product spec, phased build plan, and operating rules —
 there is no separate brief document, so treat this as the single source of
 truth for context.
 
+**Section 9 was reorganized** (previously a long chronological scroll) into
+a categorized reference of current implementation state. Sections 0–8 are
+the original spec, updated in place where the actual build has deviated
+from it — each deviation is called out explicitly, not silently.
+
 ---
 
 ## 0. What this is
 
 A mobile app (React Native + Expo) where a user photographs a clothing item
-and gets 3–4 full outfit recommendations, each with images and a short
-description. The user likes/passes each recommendation. An onboarding swipe
-deck (shown on first launch) plus ongoing like/pass feedback trains a
-per-user preference vector — via CLIP embeddings, not a trained model — so
-recommendations get more personal the more the user uses the app.
+and gets outfit ideas: 3–4 outfit concepts, each shown as individual
+clothing-item reference photos (not a single full-outfit photo) with a
+short description. An onboarding swipe deck (shown on first launch) trains
+a per-user preference vector — via CLIP embeddings, not a trained model —
+so which outfit concepts get suggested gets more personal the more the
+user uses the app. See section 1 for how "personal" is currently applied,
+including where it's applied differently than originally planned.
 
 No shopping/purchase links. This is a visual mood board and taste-learning
 tool, not a shopping tool.
@@ -25,129 +32,178 @@ Timeline: ~10 weeks (June–August). Built phase by phase — see section 4.
 
 ## 1. How the preference-learning core actually works
 
-No Teachable Machine, no separately trained model. CLIP embeddings (already
-needed elsewhere in the pipeline) are the whole mechanism:
+No Teachable Machine, no separately trained model. CLIP embeddings are the
+core mechanism, augmented by an LLM for the concept-generation step:
 
-1. **Onboarding**: show a swipe deck of ~15–20 outfit images (fixed/curated
-   set for Phase 1, not dynamically generated). Each swipe (like/pass) gets
+1. **Onboarding**: show a swipe deck of images (fixed/curated pool, not
+   dynamically generated — narrowed to a session deck via an explicit
+   style/age self-select step, see section 9). Each swipe (like/pass) gets
    CLIP-embedded.
 2. **Preference vector**: average all "liked" embeddings into one vector per
    user — a running taste centroid — stored in Supabase. A weighted
-   average, not a trained model.
+   average, not a trained model. **Built and working.**
 3. **Ongoing learning**: every like/pass on a generated recommendation
-   updates that vector. Optionally weight recent likes slightly more than
-   old ones.
-4. **Applying it**: when ranking candidate images for a new upload, score
-   each by cosine similarity to the user's preference vector and prefer
-   closer matches.
+   should update that vector. **Not built** — there is no like/pass UI on
+   recommendations and no `/api/recommendation-feedback` endpoint yet (see
+   section 4's Phase 1 status). Currently the preference vector only grows
+   from onboarding swipes.
+4. **Applying it — amended from the original plan.** The original plan was
+   to rank *candidate outfit-photo images* by cosine similarity to the
+   preference vector. In practice, full-outfit reference photos (searched
+   per concept) often didn't visually match the concept's actual listed
+   items and looked poor as a UI. **Rebuilt**: `build-recommendations` now
+   searches for an individual product/flat-lay photo per clothing item
+   (e.g. "white jeans", "gold hoop earrings") and takes the first live
+   result — **no CLIP ranking at this stage at all**. Personalization
+   still happens, just one stage earlier: `generate-concepts` biases
+   *which items get suggested in the first place* using a taste summary
+   derived from the preference vector (nearest-neighbor tags — see
+   section 9). Verified this actually changes output (section 9). The
+   preference vector is therefore still load-bearing, just not applied the
+   way this section originally described.
 
-**Amendment (Phase 1 build, see section 9 for full detail):** onboarding
-now also asks two explicit self-select questions — preferred style
-archetype(s) and age range — immediately before the swipe deck, to bias
-which images from the curated pool a given user sees. This still respects
-the "fixed/curated set, not dynamically generated" rule above: the
-underlying image pool itself is static (sourced once, offline); only
-client-side filtering of that fixed pool is personalized per user. Added
-because a single generic deck poorly serves a broad user base (e.g. a
-20-year-old and a 60-year-old shouldn't see the same deck); explicit
-self-select, rather than inferring from other data, keeps with the same
-never-assume-about-the-user spirit as the rest of this app.
+**Amendment (Phase 1 build):** onboarding also asks two explicit self-select
+questions — preferred style archetype(s) and age range — immediately before
+the swipe deck, to bias which images from the curated pool a given user
+sees. This still respects the "fixed/curated set, not dynamically
+generated" rule above: the underlying image pool itself is static (sourced
+once, offline); only client-side filtering of that fixed pool is
+personalized per user. Added because a single generic deck poorly serves a
+broad user base; explicit self-select, rather than inferring from other
+data, keeps with the same never-assume-about-the-user spirit as the rest
+of this app.
 
-Standard content-based recommendation pattern. Less infrastructure than
-Teachable Machine, not more — no training tool, no exported model files,
-just embeddings already being generated plus one row per user.
+Less infrastructure than Teachable Machine, not more — no training tool,
+no exported model files, just embeddings already being generated plus one
+row per user.
 
 ---
 
-## 2. Tech stack (do not substitute without asking)
+## 2. Tech stack
+
+This table reflects what's **actually built**, not the original plan —
+several rows changed mid-build for cost or availability reasons (each
+change is a deliberate, discussed decision — see section 9 for the
+reasoning behind each one, not a silent substitution).
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Mobile app | React Native + Expo, managed workflow | Dev via Expo Go on a physical device, no native build needed |
+| Mobile app | React Native + Expo, managed workflow | Dev via Expo Go on a physical device, no native build needed. **Expo SDK pinned to 54** — do not bump without checking Expo Go/App Store SDK support first (section 9). |
 | Navigation | `expo-router` | File-based routing |
 | Image capture | `expo-image-picker` | Camera + photo library |
-| Swipe UI | `react-native-deck-swiper` or custom `PanResponder` | Used for both onboarding and recommendation like/pass |
-| Backend | Python + FastAPI | |
-| Backend hosting | Render (free tier) | Cold-start latency expected on free tier |
-| Embeddings | CLIP via Hugging Face Inference API | Not self-hosted — CPU inference on Render free tier is too slow |
-| Outfit concepts | Claude API (Sonnet) | Generates the 3–4 outfit concepts + descriptions |
-| Visual references | Google Images API (via SerpApi or similar) | Image + source only — no price/brand/buy-link fields |
-| Auth | Supabase Auth — anonymous sign-in for Phase 1, real email/password (and/or social) signup added in Phase 2 | Anonymous session must be linkable to a permanent account on signup so preference data isn't lost |
-| DB/storage | Supabase (Postgres + Storage) | Preference vector as a float array or pgvector column |
-| Deploy (dev) | None needed | Expo Go covers all of development |
+| Swipe UI | `react-native-deck-swiper` | Used for onboarding. Has real gotchas — see section 9 before touching it. |
+| Backend | Python + FastAPI | Not yet deployed anywhere — local dev only so far |
+| Backend hosting | Render (free tier), when deployed | Not yet deployed. CPU-inference speed on this tier is an **open question** — see below |
+| Item embeddings (CLIP) | **Self-hosted locally**, via `transformers` (`openai/clip-vit-base-patch32`), CPU | Changed from the original HF Inference API plan — HF's serverless tier no longer hosts any CLIP/image-embedding model at all (confirmed dead, section 9). Replicate was also considered and rejected (not actually free). Runs both in the one-time onboarding-pool precompute script and live in `/api/analyze-item`'s request path. **Render-deploy CPU speed is unverified** — everything so far has run on a dev laptop. |
+| Item description + outfit concepts | **Gemini API** (`gemini-3.5-flash`), via the `google-genai` package | Changed from the original Claude/Sonnet plan — ruled out for cost (Gemini has a usable free tier; Claude and Replicate do not). This is the current provider for both `/api/analyze-item`'s description and `/api/generate-concepts`. **Claude is not used anywhere in the built code.** |
+| Reference images | Google Images via SerpApi | Confirmed live, real field names (section 9). Searches per individual clothing item (product/flat-lay style), not per full outfit — see section 1 point 4. No ranking model involved — first live result wins. |
+| Auth | **Not yet real.** Local-only anonymous user id (`AsyncStorage` + `expo-crypto` UUID) | Real Supabase anonymous sign-in (as originally planned for Phase 1) has not been built. This is a known gap — see section 4. |
+| DB/storage | Supabase (Postgres + `pgvector`) | Two tables so far: `preference_vectors`, `analyzed_items` — see section 9 for schema. Both created by hand via the Supabase SQL editor; no migration tooling in this repo. |
+| Deploy (dev) | None needed | Expo Go + a local FastAPI process (`--host 0.0.0.0` so a phone on the same LAN can reach it) covers all of development so far |
 
 If a task seems to need a package or service not listed here, ask before
-installing or introducing it.
+installing or introducing it. (This rule got exercised for real
+mid-build — Replicate, Claude, and BLIP were all tried or discussed and
+rejected in favor of what's in this table now. See section 9.)
 
 ---
 
-## 3. Backend API contract (Phase 1)
+## 3. Backend API contract
+
+All five endpoints below are documented as actually implemented and
+verified live, except `recommendation-feedback`, which does not exist yet.
 
 ```
 POST /api/onboarding-deck
   → { deck: [{ image_id: string, image_url: string, tags: string[] }] }
-  // Real, implemented — see section 9. Backend holds a larger fixed pool
-  // (~90+ images spanning style + age tags); the mobile app self-selects
-  // style/age first, then client-side filters this response down to a
-  // ~16-card session deck. Not a request param on this endpoint.
+  // Real. Backend holds a larger fixed pool (95 images spanning style +
+  // age tags); the mobile app self-selects style/age first, then
+  // client-side filters this response down to a ~16-card session deck.
 
 POST /api/onboarding-swipe
   body: { user_id: string, image_id: string, liked: boolean }
   → { status: "ok" }
-  // Embeds the image (or uses a precomputed embedding) and folds it into
-  // the user's preference vector.
-  // STUBBED as of section 9's latest update — validates + logs only, no
-  // real CLIP call or vector math yet.
+  // Real. Folds a liked image's precomputed CLIP embedding into a
+  // running-average preference vector in Supabase. Passes are
+  // acknowledged but don't touch the vector.
 
 POST /api/analyze-item
-  body: multipart/form-data, field "image"
+  body: multipart/form-data, fields "image" and "user_id"
   → { item_description: string, embedding_id: string }
+  // Real. item_description: Gemini API (gemini-3.5-flash), prompted to
+  // describe only the garment (type/color/pattern/fit/visible
+  // logos-text), not the person or scene. embedding_id: CLIP, self-hosted
+  // locally, stored (with the description) in a new analyzed_items
+  // Supabase row. embedding_id is currently write-only — nothing reads it
+  // back yet.
 
 POST /api/generate-concepts
   body: { item_description: string, user_id: string }
   → { concepts: [
         { vibe_label: string, items: string[], explanation: string }
-      ] }   // 3-4 concepts; LLM prompted with a text summary of the user's taste
+      ] }
+  // Real. Exactly 3-4 concepts (schema-enforced). Gemini API, same model
+  // as analyze-item. "user's taste" bias: a nearest-neighbor-tags
+  // heuristic over the onboarding pool's embeddings (not the literal
+  // preference vector as text — see section 9), recomputed per call, not
+  // stored. Falls back to no taste bias if the user has no
+  // preference_vectors row yet (e.g. hasn't onboarded).
 
 POST /api/build-recommendations
-  body: { concepts: [...], user_id: string }
+  body: { concepts: [{ vibe_label, items, explanation }], user_id: string }
   → { recommendations: [
         { vibe_label: string, explanation: string,
-          images: [{ image_url, source }] }   // ranked by similarity to preference vector
+          images: [{ item: string, image_url: string, source: string }] }
       ] }
+  // Real. Response shape differs from the original plan — each image now
+  // carries an `item` field naming the specific clothing piece it shows
+  // (e.g. "white jeans"), because images are per-item now, not per
+  // full-outfit (section 1 point 4). Up to 4 items per concept get an
+  // image (concepts can list up to 6; capped for card-size and latency
+  // reasons). No CLIP ranking — first live SerpApi result per item wins.
+  // user_id is accepted for contract-symmetry with the other endpoints
+  // but currently unused (no ranking happens here to feed it into).
 
-POST /api/recommendation-feedback
+POST /api/recommendation-feedback   ← NOT BUILT
   body: { user_id: string, recommendation_id: string, liked: boolean }
   → { status: "ok" }
-  // Same underlying update as onboarding-swipe.
+  // Same underlying update as onboarding-swipe would be. Blocked on
+  // there being no like/pass UI on recommendations yet, and no
+  // recommendation_id concept in the current build-recommendations
+  // response (recommendations aren't persisted or ID'd right now).
 ```
-
-Field names for the Google Images provider (`image_url`, `source`, etc.) are
-best guesses — confirm against a live test call before building ranking
-logic around them, and flag if the real response differs from this.
-**Partially confirmed** (section 9): the onboarding-deck curation script
-confirmed SerpApi's real `google_images` field names —
-`images_results[].original` for the direct image URL, `.link` for the
-source page — but `/api/build-recommendations`'s own use of this provider
-is still unverified live.
 
 ---
 
 ## 4. Phased build plan
 
-**Phase 1 — swipe onboarding + core recommendation loop (target: end of June)**
-- Anonymous auth on first launch.
-- Onboarding swipe deck: a fixed, curated pool of images (auto-sourced once
-  via SerpApi, not hand-picked or dynamically queried per session — see
-  section 9), narrowed to a ~16-card session deck via an explicit
-  style-archetype + age-range self-select step before swiping. Builds
-  initial preference vector.
-- Upload/take photo → CLIP embedding → LLM generates 3–4 concepts → Google
-  Images pulls reference images per concept, ranked by similarity to the
-  user's preference vector → recommendations shown with image + description.
-- Like/pass on each recommendation updates the preference vector.
-- Success criterion: after onboarding, a real clothing photo returns
-  recommendations visibly weighted toward onboarding choices (not random).
+**Phase 1 — swipe onboarding + core recommendation loop (target: end of
+June) — IN PROGRESS, not complete.** Status as of this update:
+
+- ✅ Onboarding swipe deck (style/age self-select → curated pool → session
+  deck), builds a real preference vector.
+- ✅ Upload/take photo → CLIP embedding + Gemini description → Gemini
+  generates 3-4 concepts (taste-biased) → per-item reference images shown
+  per concept.
+- ❌ **Anonymous auth on first launch** — still a local-only stand-in, not
+  real Supabase anonymous auth (see section 2's Auth row).
+- ❌ **Like/pass on each recommendation updates the preference vector** —
+  not built at all. No like/pass UI, no `/api/recommendation-feedback`.
+  This means the "ongoing learning" mechanism (section 1 point 3) doesn't
+  exist yet — the preference vector currently only grows from onboarding.
+- ⚠️ **Success criterion ("recommendations visibly weighted toward
+  onboarding choices")** — partially true. Verified that *which items get
+  suggested* is taste-biased (section 9's before/after example). *Which
+  specific photo* represents each item is not taste-ranked (deliberately
+  dropped, section 1 point 4) — this is a narrower personalization signal
+  than originally specified, though the original signal (ranking
+  full-outfit photos) is what got dropped for a good reason (looked worse,
+  slower).
+
+**What's left to close out Phase 1 properly:** the like/pass +
+recommendation-feedback loop, and a decision on whether to build real
+anonymous Supabase auth now or explicitly defer it into Phase 2's account
+work. Neither has been discussed yet — ask before assuming either way.
 
 **Phase 2 — user accounts + persistence + polish (target: mid-July)**
 - Real signup/login (email/password, and/or social sign-in if time allows),
@@ -156,17 +212,26 @@ is still unverified live.
   their new account on signup — Supabase supports linking an anonymous
   session to a permanent account, so this shouldn't require rebuilding the
   vector from scratch. Confirm this linking flow works before considering
-  the migration done, don't just assume it carries over.
+  the migration done, don't just assume it carries over. (Note: since real
+  anonymous Supabase auth isn't built yet either — see Phase 1 status above
+  — this phase may need to absorb that work too, not just the
+  anonymous→permanent migration.)
 - Store past recommendations + like history in Supabase, tied to the
   now-permanent user ID.
 - Loading states, error states (no images found, CLIP/LLM failure, auth
-  failures).
+  failures). Partial progress already exists here — see section 9's notes
+  on 429/503 handling for the Gemini-calling endpoints.
 - UI polish on swipe deck, recommendation cards, and the new login/signup
   screens — this is a portfolio piece.
 
 **Phase 3 — preference tuning (target: late July)**
 - Tune recency weighting in the preference vector.
-- Consider a lightweight "why this was recommended" signal for transparency.
+- Consider a lightweight "why this was recommended" signal for
+  transparency — `analyzed_items.embedding_id` (currently write-only, see
+  section 3) may be relevant infrastructure for this.
+- Possible revisit: bring CLIP-based ranking back into
+  `build-recommendations` if per-item personalization turns out to matter
+  more than expected once real usage data exists.
 
 **Phase 4 — stretch: Pinterest import (Aug, optional)**
 - Pinterest API v5 exists (`boards:read`/`pins:read` scopes) and is
@@ -185,48 +250,84 @@ UI polish. Phase 1 cannot be cut — it's the entire product.
 
 ---
 
-## 5. Risks to validate early, not late
+## 5. Risks — status
 
-- **Cold-start problem**: 15–20 onboarding swipes is a small sample —
+- **Cold-start problem** (still open) — a small onboarding sample means
   recommendations right after onboarding may feel generic until real-use
-  likes accumulate. Test on yourself early.
-- **Google Images API coverage/reliability/response fields** — verify
-  against the actual provider before building ranking logic around it.
-- **HF Inference API cold starts** — first call to a model can be slow.
-- **Anonymous auth persistence** — confirm the Supabase anonymous session
-  survives app restarts on a real device before relying on it.
-- **Anonymous-to-permanent account migration (Phase 2)** — test that
-  signing up actually carries over the existing preference vector and
-  history rather than starting a fresh empty account under the hood; this
-  is an easy thing to silently get wrong.
-- **Expo Go limitations** — `expo-image-picker` and swipe gesture libraries
-  all work fine in Expo Go; no ejecting needed for this project.
+  likes accumulate, and there's currently no post-onboarding feedback loop
+  at all (Phase 1 gap above) to accumulate more.
+- **Google Images API coverage/reliability/response fields** — ✅ resolved.
+  Confirmed live against SerpApi; real field names documented in section 3.
+- **HF Inference API** — ✅ resolved by moving off it entirely (section 2).
+  Not "cold starts were slow," but "no longer hosts the model at all" —
+  worth re-checking if a future session assumes HF is still viable for
+  anything vision-related; their offerings change over time.
+- **Render CPU inference speed** — **still open, now higher-stakes.** The
+  original concern was about a hypothetical future deploy; CLIP and Gemini
+  calls are now both live in real request paths (`analyze-item`), not just
+  an offline script, and nothing has been deployed to Render yet to
+  actually test this.
+- **Anonymous auth persistence** — not yet applicable; real Supabase
+  anonymous auth isn't built (Phase 1 gap above). The current local-id
+  stand-in's persistence has been informally verified (survives app
+  restarts, per section 9's dev-reset notes) but that's not the same
+  guarantee.
+- **Anonymous-to-permanent account migration (Phase 2)** — unchanged risk,
+  still to be tested once Phase 2 auth work starts.
+- **Expo Go limitations** — ✅ non-issue confirmed. `expo-image-picker` and
+  `react-native-deck-swiper` both work fine in Expo Go; no ejecting needed.
+- **New risk surfaced this build: third-party model/API availability drift.**
+  Over the course of Phase 1 so far, three different provider assumptions
+  went stale mid-build (HF's CLIP hosting, `gemini-2.0-flash`'s
+  availability, Replicate's actual pricing). Don't trust a cached
+  assumption about any external model/API's current state — verify live
+  before building against it, same as the existing working rule #3 already
+  says.
 
 ---
 
 ## 6. Mobile app screens
 
-1. **Onboarding swipe screen** — first launch only. Actually three
-   sub-steps: style-archetype self-select → age-range self-select → swipe
-   deck (see section 9).
-2. **Upload screen** — camera/library picker, single CTA.
-3. **Loading screen** — three-stage progress (Identifying the piece →
-   Generating outfit ideas → Finding references).
-4. **Recommendations screen** — image + description cards, like/pass on each.
-5. *(Phase 2)* **Login/signup screens** — email/password (and/or social),
+Actual screen structure differs from the original plan — screens 2–4 got
+built as one combined screen rather than three separate ones, since the
+underlying flow between them has no real navigation boundary (it's one
+continuous async operation with three loading stages).
+
+1. **Onboarding swipe screen** (`mobile/src/app/onboarding.tsx`) — first
+   launch only. Three sub-steps: style-archetype self-select → age-range
+   self-select → swipe deck.
+2. **Upload screen** (`mobile/src/app/upload.tsx`) — **combines the
+   original screens 2, 3, and 4.** Camera/library picker → three
+   sequential loading stages (Identifying the piece → Generating outfit
+   ideas → Finding references) → outfit concept cards, each with a
+   swipeable image carousel (one item photo at a time, dot pagination,
+   captioned with the item name) and an explanation. No like/pass — see
+   section 4's Phase 1 gap. Ends with a "Done" link back to `/`.
+   **This is a temporary combined-screen shape**, not a deliberate final
+   design — revisit if/when a dedicated Recommendations screen with
+   like/pass gets built.
+3. *(Phase 2)* **Login/signup screens** — email/password (and/or social),
    with anonymous-to-permanent account linking on signup.
-6. *(Phase 2)* **History screen** — past recommendations from Supabase.
-7. *(Phase 4)* **Pinterest connect screen** — optional, off the main flow.
+4. *(Phase 2)* **History screen** — past recommendations from Supabase.
+5. *(Phase 4)* **Pinterest connect screen** — optional, off the main flow.
 
 ---
 
-## 7. Repo structure (proposed — adjust if there's a reason to)
+## 7. Repo structure
 
 ```
 /mobile        Expo app (expo-router structure)
+  /src/app       Screens (index, onboarding, upload) — file-based routing
+  /src/services  api.ts (backend calls), anonymous-user.ts, onboarding-status.ts
+  /src/data      style-buckets.ts, age-ranges.ts (onboarding self-select data)
 /backend       FastAPI app
-  /routes      One file per endpoint group
-  /services    CLIP, LLM, Google Images, preference-vector logic
+  main.py        App setup, CORS, router registration, /health
+  /routes        onboarding.py, item.py, concepts.py, recommendations.py
+  /services      One file per concern — CLIP, Gemini, SerpApi, Supabase,
+                  preference-vector math, taste-summary derivation, plus a
+                  few small shared-helper modules factored out along the
+                  way (gemini_client.py, gemini_errors.py, embedding_utils.py)
+  /scripts       fetch_onboarding_images.py (one-time, manually-run)
 CLAUDE.md      This file
 ```
 
@@ -235,353 +336,305 @@ CLAUDE.md      This file
 ## 8. Working rules
 
 1. **One phase at a time**, in the order in section 4. Don't start Phase 2
-   while Phase 1 is unverified.
+   while Phase 1 is unverified. (Phase 1 is currently unverified per
+   section 4's status — the like/pass loop is missing.)
 2. **Mock external APIs first, wire in real ones second.** For any phase
    touching CLIP, the LLM, or Google Images: build against mocked responses
    first, confirm the UI/data flow works, then swap in one real integration
    at a time — testing after each swap, not after all of them.
-3. **Never assume a third-party API's response shape.** Confirm against a
-   live test call before building logic around it, and flag any mismatch
-   with what's documented here.
+3. **Never assume a third-party API's response shape or a model's current
+   availability.** Confirm against a live test call before building logic
+   around it, and flag any mismatch with what's documented here. This bit
+   for real multiple times in Phase 1 (see section 5's new risk entry) —
+   take it seriously, not as boilerplate.
 4. **Confirm before moving on** — actually run the Expo dev server / FastAPI
    server and verify a step works before considering it done.
 5. **Secrets** go in environment variables / `.env`, never hardcoded, never
    printed to chat.
 6. **Ask, don't guess** on anything ambiguous — a wrong assumption compounds
-   across phases faster than a clarifying question would cost.
+   across phases faster than a clarifying question would cost. This
+   includes provider/cost tradeoffs, not just technical ambiguity — several
+   mid-build pivots this phase (Claude→Gemini, Replicate→self-hosted,
+   per-concept→per-item images) came from asking first rather than
+   guessing what the user would prefer.
 
 ---
 
-## 9. Current implementation state (living section — update as work progresses)
+## 9. Current implementation state (reference, organized by topic)
 
-This section tracks decisions and progress made during actual implementation,
-as a supplement to the spec above. Sections 0–8 are the original plan and
-should stay as the source of truth for intent; this section is where we
-record what's actually been built and any environment-specific gotchas
-discovered along the way.
+Supplement to the spec above — sections 0–8 now reflect actual state
+directly where they diverged; this section holds the supporting detail,
+gotchas, and reasoning that's too granular for the main sections.
 
-**Repo**: `github.com/krisha06/styling-assistant`. Work happens on branch
-`1-core-application` for all of Phase 1.
+### Repo / environment
 
-**Expo SDK is pinned to 54, not the newest available.** As of mid-2026, the
-iOS App Store build of Expo Go is capped at SDK 54 — SDK 55+ has been stuck
-in Apple App Store review with no ETA (see Expo's own changelog:
-expo.dev/changelog/expo-go-and-app-store-may-2026). Installing the "latest"
-`expo` package (57 at time of writing) will silently produce a project that
-Expo Go on a physical iOS device rejects with "Project is incompatible with
-this version of Expo Go" / "requires a newer version of Expo Go" — that
-error is misleading; the fix is to *downgrade* the project to match Expo
-Go's actual App Store SDK cap, not to update Expo Go (it's already current).
-**Do not bump the `expo` package version without checking current Expo
-Go/App Store SDK support first.**
+- **Repo**: `github.com/krisha06/styling-assistant`. Work happens on
+  branch `1-core-application` for all of Phase 1.
+- **Expo SDK pinned to 54, not the newest available.** The iOS App Store
+  build of Expo Go is capped at SDK 54 as of this writing — installing the
+  "latest" `expo` package will silently produce a project Expo Go rejects
+  with a misleading "requires a newer version of Expo Go" error. The fix
+  is downgrading the project, not updating Expo Go. **Do not bump `expo`
+  without checking current Expo Go/App Store SDK support first.**
+- **`mobile/AGENTS.md` conflict — still unresolved, still present.**
+  Contains an instruction to read Expo v57 docs "before writing any code,"
+  contradicting the SDK 54 pin above. Flagged to the user previously as a
+  possible stale-file/prompt-injection situation; not modified or acted
+  on. Re-flagging here since it hasn't been resolved across multiple
+  sessions now — worth actually resolving (confirm intent or delete)
+  before any future Expo-version-touching work.
+- Key package versions: `expo ^54.0.0`, `react-native 0.81.5`,
+  `expo-router ~6.0.24`, `expo-image-picker ~17.0.11`,
+  `expo-crypto ~15.0.9`, `react-native-deck-swiper ^2.0.19`.
+- Backend: Python 3.13, FastAPI, local `.venv` in `backend/`.
+  `requirements.txt`: `fastapi`, `uvicorn[standard]`, `requests`,
+  `python-dotenv`, `supabase`, `numpy`, `torch`, `transformers`, `Pillow`,
+  `python-multipart`, `google-genai`. **No `anthropic`, no `replicate`** —
+  both were added at points mid-build when those providers were being
+  tried, then removed once the decisions landed elsewhere. If either
+  reappears in `requirements.txt`, it's stray, not intentional.
+- **Env vars** (`backend/.env`, gitignored — `.env.example` has the
+  keys with empty values): `SERPAPI_KEY`, `SUPABASE_URL`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`. No Replicate or Anthropic
+  key needed by anything currently built.
+- Dev workflow: backend via `.venv/bin/uvicorn main:app --host 0.0.0.0
+  --port 8000` (the `--host 0.0.0.0` matters — a bare `uvicorn main:app`
+  only binds localhost and a phone on the same LAN can't reach it), mobile
+  via `npx expo start` in a real terminal (not backgrounded — Expo's QR
+  code only renders in an interactive TTY).
 
-- Swipe UI decision from section 2's either/or: **`react-native-deck-swiper`**
-  (over custom `PanResponder`) — used for onboarding, and will be reused for
-  recommendation like/pass.
-- Mobile app scaffolded via `create-expo-app` (expo-router, TypeScript). The
-  default demo template (tab bar, `explore.tsx`, `app-tabs.tsx` and the
-  components only they used) has been removed and replaced with a `Stack`
-  layout in `src/app/_layout.tsx`, since the real app flow is linear
-  (onboarding → upload → loading → recommendations), not tabbed.
-- Onboarding swipe screen built at `mobile/src/app/onboarding.tsx`, gated by
-  a local AsyncStorage flag (`mobile/src/services/onboarding-status.ts`) so
-  it only shows once — this is a local-only stand-in until Phase 2 auth
-  exists; it is not the permanent mechanism described in section 4.
-- Per working rule #2, onboarding is currently wired against a **mock**
-  API layer (`mobile/src/services/api.ts` + `mobile/src/data/onboarding-deck.ts`)
-  standing in for `POST /api/onboarding-deck` and `POST /api/onboarding-swipe`
-  from section 3, using placeholder (picsum) images. No backend exists yet.
-  Images are intentionally left as placeholders for now — swap for a real
-  curated outfit-photo set once the backend/onboarding-deck endpoint exists,
-  rather than doing the swap twice.
-- `/backend` FastAPI skeleton has not been started yet. **This is the next
-  task** (mocked endpoints first, per working rule #2 and the Half A/Half B
-  build order agreed on for Phase 1).
+### Mobile — screens and gotchas
 
-**`react-native-deck-swiper` gotcha (cost real debugging time — read before
-touching `onboarding.tsx` again):**
-- The library sizes cards off `Dimensions.get('window')` (the full device
-  screen height), not off its actual parent container's measured size. If
-  you nest it below a header inside a normal flex column, the cards will
-  always be too tall and overflow past the bottom of the screen — the
-  `marginTop`/`marginBottom`/`cardVerticalMargin` props are the only way to
-  compensate, and they only work correctly if the `<Swiper>` itself fills
-  the *entire* screen (i.e. render any header as an absolutely-positioned
-  overlay on top of it, not as a flex sibling that eats real layout space).
-- Its `shouldComponentUpdate` is hardcoded to only check the `cards` and
-  `cardIndex` props (plus a few internal state fields) — it **silently
-  ignores** changes to `marginTop`/`marginBottom`/`cardVerticalMargin`, so
-  recomputing those from a measured value (e.g. header height via
-  `onLayout`) won't actually update the rendered card size unless you force
-  a remount, e.g. `key={headerHeight}` on the `<Swiper>`.
-- Current working implementation of both fixes lives in
-  `mobile/src/app/onboarding.tsx` — treat that file as the reference pattern
-  if `react-native-deck-swiper` is reused for the recommendation
-  like/pass screen later (section 6, screen 4).
+- Scaffolded via `create-expo-app`; default demo template removed in favor
+  of a linear `Stack` layout (`src/app/_layout.tsx`) since the real flow
+  isn't tabbed.
+- **`react-native-deck-swiper` gotchas** (cost real debugging time —
+  read before touching `onboarding.tsx` again):
+  1. Sizes cards off `Dimensions.get('window')` (full device screen), not
+     its parent container. Nesting it below a header in a normal flex
+     column causes overflow. Fix: render any header as an
+     absolutely-positioned overlay, let `<Swiper>` fill the entire screen,
+     and feed it the header's measured height via `marginTop`.
+  2. Its `shouldComponentUpdate` silently ignores changes to
+     `marginTop`/`marginBottom`/`cardVerticalMargin` — recomputing those
+     from a measured value won't visibly update unless you force a
+     remount (`key={headerHeight}` on `<Swiper>`).
+  3. `onSwipedAll`'s completion callback has a timing race at the last
+     card — sometimes fires late or not at all. Workaround: detect the
+     last card yourself (`cardIndex === deck.length - 1`) and finish
+     immediately, keeping `onSwipedAll` only as a guarded fallback.
+  Reference implementation for all three: `mobile/src/app/onboarding.tsx`.
+  Apply the same patterns if this library is ever reused elsewhere.
+- **Onboarding flow**: 3-stage local state machine
+  (`select-style → select-age → swiping`) in `onboarding.tsx`.
+  `style-buckets.ts` / `age-ranges.ts` hold the UI-facing self-select
+  options. `buildSwipeDeck()` does client-side personalized filtering of
+  the already-fetched pool (no new backend params) — matched-tag cards
+  score highest, partial matches next, rest backfill for variety.
+- **Anonymous user id**: `mobile/src/services/anonymous-user.ts`, a local
+  `AsyncStorage`-persisted `anon-<uuid>` via `expo-crypto`'s
+  `Crypto.randomUUID()` — **not** the bare `crypto.randomUUID()` global
+  (this RN/Expo setup doesn't polyfill Web Crypto; the bare global throws
+  at runtime). This is the stand-in referenced throughout as "not real
+  Supabase anonymous auth."
+- **Dev-only reset**: `index.tsx`'s `__DEV__`-only button resets both
+  onboarding status *and* the anonymous user id together
+  (`resetAnonymousUserId()` + `resetHasOnboarded()`) — resetting only the
+  first one silently kept re-using the same Supabase preference-vector
+  row across "resets" (found and fixed; not a live bug, but a real trap if
+  the pattern is copied elsewhere).
+- **Image load failures degrade gracefully**: hotlinked images (both the
+  onboarding deck and per-item reference photos) can link-rot. Both
+  `onboarding.tsx`'s `SwipeCard` and `upload.tsx`'s `ReferenceImage`
+  handle `onError` on `expo-image` by swapping in a labeled "Image
+  unavailable" placeholder instead of a blank/broken card.
+- **`upload.tsx`** (the combined upload/loading/recommendations screen):
+  - Three-stage async chain: `analyzeItem()` → `generateConcepts()` →
+    `buildRecommendations()`, with `stage` state driving which loading
+    message shows (`'analyzing' | 'generating-concepts' |
+    'finding-references'`).
+  - `services/api.ts`'s `analyzeItem()` was this file's first
+    `FormData`/multipart call (everything before it was JSON) — sent
+    **without** an explicit `Content-Type` header so RN sets the boundary
+    itself.
+  - **Error handling**: `RateLimitedError` (429) and `OverloadedError`
+    (503) are thrown as distinct classes from a shared `throwForStatus()`
+    helper in `api.ts`, so `upload.tsx` can show a message specific to
+    each case rather than one generic failure string. See "Gemini
+    reliability" below for the backend side of this.
+  - **Image display went through two iterations.** First: a static
+    wrapped grid of small (100×100) thumbnails with a 2-line-truncated
+    item-name caption underneath — captions got visibly clipped at that
+    size (user feedback, not caught in testing). **Rebuilt** as a
+    swipeable `FlatList` carousel (`pagingEnabled`, one image at a time,
+    full-width, un-clipped caption, dot-pagination row using the app's
+    existing `backgroundElement`/`backgroundSelected` theme tokens rather
+    than new hardcoded colors) — current shape, one carousel per concept
+    card.
 
-All of the onboarding screen work, the SDK 54 downgrade, and the
-`app.json`/`use-theme.ts`/`animated-icon.tsx` fixes described above are
-committed (`b626fd5`, "Build onboarding swipe screen; downgrade to Expo
-SDK 54") and pushed to `origin/1-core-application`.
+### Backend — endpoint-by-endpoint
 
----
+**`/api/onboarding-deck` + `/api/onboarding-swipe`** (`routes/onboarding.py`)
+— both real. Swipe folds a liked image's precomputed embedding into a
+running-average `preference_vectors` row; passes are acknowledged but
+don't touch it.
 
-**`/backend` now exists** (the line above said "this is the next task" as of
-the last update — this block covers that work). Minimal FastAPI app:
-`main.py` (app + dev CORS + `/health`), `routes/onboarding.py`,
-`services/onboarding_deck.py`. Only the onboarding endpoints are built —
-`/api/analyze-item`, `/api/generate-concepts`, and
-`/api/build-recommendations` from section 3 are still unbuilt, deliberately
-out of scope for this pass.
+**Curated onboarding image pool** (`backend/scripts/fetch_onboarding_images.py`,
+one-time manually-run script → `services/onboarding_deck.json`, currently
+95 images): queries SerpApi once per tag (16 tags: 12 style archetypes +
+4 age-range proxies), embeds each via local CLIP, writes the pool. Three
+real quality problems were found and fixed while building this — all
+still relevant if this script is ever re-run or adapted:
+1. Plain `"<tag> outfit"` queries surfaced Pinterest collage graphics and
+   magazine multi-celebrity grids. Fixed with a query suffix
+   (`"street style photo -pinterest -collage -site:pinterest.com"`) plus
+   Google's `tbs=itp:photo` filter.
+2. `-site:pinterest.com` only excludes results whose *source page* is
+   Pinterest — Pinterest's image CDN (`pinimg.com`) serves the same
+   collage images via other source pages. Fixed by blocking the CDN host
+   directly.
+3. ~4% of live SerpApi URLs were dead on arrival (TikTok's internal image
+   API returning 403 without a session; Facebook/Instagram SEO-crawler
+   placeholder domains returning HTML, not an image). Fixed by
+   live-validating every candidate URL (real GET + content-type check)
+   before writing it to the pool, in addition to blocking known-bad
+   domains outright.
+Age tagging is a best-effort proxy via query phrasing only (e.g. "senior
+style outfit over 60") — Google Images has no real demographic filter.
+Known limitation, not a bug.
 
-- `POST /api/onboarding-deck` is real — serves the curated pool from
-  `services/onboarding_deck.json`.
-- `POST /api/onboarding-swipe` is still a **stub** — validates the payload
-  and logs, but does not call CLIP or touch a preference vector (no
-  Supabase yet either). Marked with a `TODO(real-CLIP-integration)` comment
-  in `routes/onboarding.py`, grep-able when that work starts.
+**`/api/analyze-item`** (`routes/item.py`) — real, two independent
+sub-steps run sequentially (a discussed-but-not-yet-implemented speedup:
+running them concurrently instead, since neither depends on the other's
+output — see "Possible next optimization" below):
+- **Description**: `services/image_caption.py`, Gemini API. Went through
+  two provider changes before landing here — originally planned as a
+  Claude vision call (section 2's old pin); ruled out for cost. Tried a
+  local BLIP model (`Salesforce/blip-image-captioning-base`, same free
+  self-hosted pattern as CLIP) — worked, but described the overall
+  scene/person ("a man holding a white shirt") instead of the garment,
+  missing detail like logos. Replaced with Gemini
+  (`gemini-3.5-flash`), prompted explicitly for garment-only detail
+  (type/color/pattern/fit/visible logos-text, not the person/background)
+  — fixed the quality problem. Also confirmed live that
+  `gemini-2.0-flash` (an earlier, more familiar model name) is no longer
+  a listed/available model — `gemini-3.5-flash` is Google's current
+  flash-tier model as of this build; re-verify if this drifts again.
+- **Embedding**: `services/clip.py`'s `embed_image_bytes()`, factored out
+  of the pool-precompute script's `embed_image_url()` so both share the
+  same model-loading/processor logic — keeps live embeddings in the same
+  vector space as the onboarding pool's precomputed ones. Considered
+  Replicate as a hosted alternative to self-hosting; rejected once
+  confirmed it isn't actually free.
+- **Storage**: `services/analyzed_items.py` writes a row to a new
+  `analyzed_items` Supabase table (schema below) — currently write-only,
+  nothing reads `embedding_id` back.
 
-**Curated onboarding image pool — sourced automatically, not hand-picked.**
-Rather than hand-curating ~15-20 photos (impractical to do well across
-demographics), `backend/scripts/fetch_onboarding_images.py` is a one-time,
-manually-run script that queries SerpApi's Google Images engine once per
-tag and writes the results to `services/onboarding_deck.json`. Re-run any
-time to refresh the pool — it fully re-fetches everything, not
-incrementally, so each run costs one SerpApi search per tag against your
-account's quota.
+**`/api/generate-concepts`** (`routes/concepts.py`) — real. Same Gemini
+provider as analyze-item (asked and confirmed explicitly, not assumed,
+given the just-made cost-driven swap on the sibling endpoint).
+- **Structured output**: `services/concepts.py` uses
+  `GenerateContentConfig(response_mime_type="application/json",
+  response_schema=ConceptsResult)` (Pydantic models) rather than
+  prompting for JSON and hand-parsing — confirmed the installed
+  `google-genai` version supports this and returns a parsed instance on
+  `response.parsed`. The 3–4 concept-count constraint is schema-enforced
+  via `Field(min_length=3, max_length=4)`; verified live, never returned
+  outside that range across multiple test calls.
+- **Taste summary**: `services/taste_summary.py`. Section 3's contract
+  calls for "a text summary of the user's taste" but a preference vector
+  is just 512 numbers — resolved via a nearest-neighbor-tags heuristic:
+  find the onboarding pool's 5 most similar images (cosine similarity) to
+  the user's preference vector, summarize their most common style tags
+  (age tags excluded — not style descriptors) as
+  `"leans toward: <tag>, <tag>, <tag>"`. Recomputed fresh per call, not
+  cached or stored. Returns `None` (no taste bias applied) if the user has
+  no `preference_vectors` row yet. **Verified this actually biases
+  output**: a user whose nearest-neighbor tags were `workwear, minimalist,
+  quiet-luxury` got concepts literally labeled "Sophisticated Quiet
+  Luxury" / "Modern Heritage Workwear" / "Refined Office Minimalist";
+  the same item description with no taste vector produced a visibly
+  different, unbiased set.
 
-- 16 tags total: 12 style archetypes (`classic-timeless`, `quiet-luxury`,
-  `preppy`, `workwear`, `cozy-casual`, `minimalist`, `athleisure`,
-  `streetwear`, `colorful-maximalist`, `eclectic-vintage`, `romantic`,
-  `boho`) + 4 age ranges (`under-25`, `25-40`, `40-60`, `60-plus`) — the
-  latter tagged separately from style, not crossed with it. Current pool:
-  94 images (~6 per tag).
-- Age tagging is a **best-effort proxy via search-query phrasing only**
-  (e.g. "senior style outfit over 60") — Google Images has no real
-  demographic filter, so results aren't guaranteed to actually depict
-  someone in that age range. Known limitation, not a bug — revisit if a
-  better source/method comes up later; the script is fully decoupled from
-  the rest of the app, so swapping it out only touches this one file.
-- **Resolves section 3's "best guess" flag on SerpApi's response shape**:
-  confirmed live — results are under `images_results`, each item's direct
-  image URL is `.original` (not `.image_url`), source page is `.link`.
-- Three real quality problems surfaced and fixed while building this — read
-  before re-running or modifying the script:
-  1. Plain `"<tag> outfit"` queries returned a lot of unusable results:
-     Pinterest "collage card" graphics (dozens of cut-out people composited
-     onto a flat background with a big caption) and magazine multi-celebrity
-     cutout grids, not real single-shot photos. Fixed by appending
-     `"street style photo -pinterest -collage -site:pinterest.com"` to every
-     query plus Google's `tbs=itp:photo` filter.
-  2. `-site:pinterest.com` only excludes results whose *source page* is
-     pinterest.com — it does **not** block images served from Pinterest's
-     image CDN (`pinimg.com`) via other source pages, so collage-style
-     images were still slipping through. Fixed by blocking the `pinimg.com`
-     host directly (`BLOCKED_URL_SUBSTRINGS` in the script).
-  3. ~4% of URLs from a live SerpApi response were actually dead on
-     arrival — TikTok's internal image API (`tiktok.com/api/img`, 403
-     without a session) and Facebook/Instagram's SEO-crawler placeholder
-     domains (`lookaside.instagram.com`, `lookaside.fbsbx.com`, return HTML
-     not an image) — these render as a blank/black swipe card in the app.
-     Fixed by live-validating every candidate URL (real HTTP GET +
-     content-type check) before writing it to the deck, in addition to
-     blocking the known-bad domains outright.
+**`/api/build-recommendations`** (`routes/recommendations.py`) — real,
+**rebuilt once already** after the first version's results looked poor:
+- **v1 (superseded)**: one SerpApi search per *concept* (vibe_label +
+  full item list), aiming for full-outfit street-style photos, with
+  results ranked by CLIP cosine-similarity to the preference vector —
+  i.e., exactly what section 1's original plan described. Worked
+  end-to-end and was verified live, but the actual photos often didn't
+  visually match the concept's specific listed items (a stock photo
+  tagged "quiet luxury outfit" isn't guaranteed to contain cream wool
+  trousers specifically) — user feedback after real device testing.
+- **v2 (current)**: `services/reference_images.py` searches per
+  *individual item* instead (product/flat-lay-style query — e.g. `"white
+  jeans product photo -pinterest -collage -site:pinterest.com"`, same
+  `tbs=itp:photo` filter and blocked-domain list as the onboarding
+  script), capped at 4 items per concept. `services/recommendations.py`
+  takes the **first live candidate** per item (`is_url_usable()` — a
+  lightweight GET + content-type check, same pattern as the onboarding
+  script's URL validation) — **no CLIP embedding or ranking in this
+  endpoint at all now.** This was a deliberate, discussed tradeoff, not
+  an oversight: per-item photo style doesn't vary meaningfully by taste
+  the way full-outfit styling does, so the ranking cost (a CLIP forward
+  pass per candidate) bought little, and dropping it meaningfully sped
+  the endpoint up (roughly 18s for 4 items vs. ~37s for 3 concepts under
+  the old ranked-outfit-photo approach, in informal timing). Response
+  shape changed to match: `images: [{item, image_url, source}]`, not
+  `[{image_url, source}]` — see section 3.
+- Verified images are genuinely valid: spot-checked several real response
+  URLs, confirmed real `image/*` content-type on GET (note: HEAD requests
+  can report differently than GET for redirecting URLs — `requests.get()`
+  with default redirect-following is what the backend actually uses and
+  what should be used to verify, not a plain HEAD).
 
-**Onboarding flow now has a self-select pre-filter, not just a swipe deck**
-(amends section 1 point 1 and section 6 screen 1 — see the amendment notes
-there). `mobile/src/app/onboarding.tsx` is now a 3-stage local state
-machine: `select-style` → `select-age` → `swiping`.
+**Gemini reliability** (`services/gemini_client.py`,
+`services/gemini_errors.py`) — shared across every Gemini call site:
+- `generate_content_with_retry()`: a live call once returned `503
+  UNAVAILABLE` ("model currently experiencing high demand... usually
+  temporary"). Added a single automatic retry after a short delay on
+  `ServerError` before giving up — resolves many cases silently.
+- `raise_for_gemini_error()`: maps `ClientError` (429 → friendly
+  rate-limit message) and `ServerError` (503, after the retry above
+  already failed once → friendly "temporarily overloaded" message)
+  to distinct `HTTPException`s; anything else falls through to a generic
+  500. Shared by `routes/item.py` and `routes/concepts.py` (the two
+  Gemini-calling routes) so the mapping doesn't drift per route.
+- Mobile mirrors this with `RateLimitedError`/`OverloadedError` in
+  `services/api.ts` (see mobile section above).
 
-- `mobile/src/data/style-buckets.ts`: 4 UI-facing buckets (Classic &
-  Polished, Casual & Cozy, Bold & Street, Romantic & Boho) each mapping to
-  2-4 of the fine-grained style tags above, plus a "Not sure — show me a
-  mix" skip. User picks up to 2 buckets.
-- `mobile/src/data/age-ranges.ts`: the 4 age tags above as UI labels, plus a
-  "Prefer not to say" skip.
-- `buildSwipeDeck()` in `onboarding.tsx` does the actual personalization —
-  pure client-side filtering of the already-fetched pool, no new backend
-  endpoint or params: cards matching both the selected style tags and the
-  selected age tag score highest, cards matching just one score next, the
-  rest backfill up to a ~16-card session deck for variety. Never a fully
-  monotonous deck even with a narrow bucket+age combo.
-- This deliberately stops short of a fancier version discussed and rejected
-  for now (live per-session dynamic image fetching, two-round
-  CLIP-centroid + pgvector refinement) — that needs real CLIP and Supabase
-  wired in first, neither of which exists yet. Revisit as a Phase 3-style
-  enhancement once the Phase 1 core loop (real CLIP embedding + preference
-  vector) is actually built.
+**Possible next optimization, discussed but not yet implemented:**
+`analyze-item`'s two sub-steps (Gemini description call, local CLIP
+embedding) currently run sequentially even though neither depends on the
+other's output — running them concurrently (e.g. `asyncio.gather`, each
+call in a thread since both are blocking) would cut total latency to
+roughly `max(Gemini time, CLIP time)` instead of the sum. Flagged as the
+highest-value, lowest-risk speedup available; not done yet, don't assume
+it's already in place.
 
-**Mock API layer fully replaced with real backend calls.**
-`mobile/src/data/onboarding-deck.ts` (the picsum-placeholder mock) is
-deleted. `mobile/src/services/api.ts` now makes real `fetch` calls to
-`/api/onboarding-deck` and `/api/onboarding-swipe`, with the backend base
-URL auto-detected from `Constants.expoConfig.hostUri` (the same LAN host
-Expo Go already resolves to load the JS bundle), overridable via
-`EXPO_PUBLIC_API_BASE_URL`. New `mobile/src/services/anonymous-user.ts`
-generates and persists a local random user id (AsyncStorage) — a temporary
-stand-in for the `user_id` the swipe contract needs, since Phase 1
-anonymous Supabase auth isn't built yet. Uses `expo-crypto`'s
-`Crypto.randomUUID()`, **not** the bare `crypto.randomUUID()` global —
-verified this RN 0.81.5/Expo setup doesn't polyfill Web Crypto, so the bare
-global throws at runtime.
+### Supabase schema
 
-**Dev-only onboarding reset.** `mobile/src/app/index.tsx`'s placeholder
-home screen has a `__DEV__`-only "[dev] Reset onboarding" link (calls the
-new `resetHasOnboarded()` in `onboarding-status.ts`) so onboarding can be
-re-tested without reinstalling the app. Won't ship to production builds.
+Both tables below use `pgvector`, are RLS-enabled with **zero policies**
+(default-deny for the publishable/anon key; the backend's service-role
+key bypasses RLS), and were created by hand via the Supabase SQL editor —
+there's no migration tooling in this repo, so any future schema change
+needs the same manual-SQL-editor step, or introducing real migrations
+first.
 
-**Second `react-native-deck-swiper` gotcha** (in addition to the
-sizing/remount one above): its `onSwipedAll` completion callback has a
-timing race right at the last card — sometimes fires late or not at all,
-leaving an empty stack visible instead of navigating away. Worked around in
-`onboarding.tsx`'s `handleSwipe` by detecting the last card ourselves
-(`cardIndex === deck.length - 1`) and finishing immediately, with
-`onSwipedAll` kept only as a guarded fallback (a `finished` ref prevents
-double-firing). Apply the same pattern if this library is reused for the
-recommendation like/pass screen (section 6, screen 4).
+- **`preference_vectors`**: `user_id text primary key`, `embedding
+  vector(512)`, `like_count int`, `updated_at`. One row per user, updated
+  in place as a running average (not one row per like).
+- **`analyzed_items`**: `embedding_id uuid primary key default
+  gen_random_uuid()`, `user_id text`, `embedding vector(512)`,
+  `item_description text`, `created_at timestamptz default now()`. One
+  row per `analyze-item` call (not a running average). Currently
+  write-only — see `/api/analyze-item`'s notes above.
 
-**Image load failures now degrade gracefully.** Since onboarding images are
-hotlinked from arbitrary external sites, some link rot over time is
-inevitable even with the validation above. `onboarding.tsx` now has a
-`SwipeCard` component with an `onError` handler on the `expo-image` — a
-failed load shows a labeled "Image unavailable" placeholder instead of a
-blank card.
-
----
-
-**`POST /api/onboarding-swipe` is now real** (was previously the last
-documented stub in section 3/9). Implements CLAUDE.md section 1 steps 1-3:
-liked swipes are folded into a running-average preference vector per user,
-stored in Supabase; passes are acknowledged but never touch the vector.
-
-- **Stack deviation from section 2, done with explicit sign-off (not a
-  silent substitution):** section 2 pins "CLIP via Hugging Face Inference
-  API," but as of this work, HF's serverless Inference API **no longer
-  hosts any CLIP or image-embedding model at all** — confirmed live via
-  `curl https://huggingface.co/api/models/openai/clip-vit-base-patch32?expand=inferenceProviderMapping`,
-  which returns an empty `inferenceProviderMapping` (checked several other
-  CLIP/image-embedding checkpoints too — same result). The
-  `api-inference.huggingface.co` domain used by the old REST pattern no
-  longer even resolves; HF's `docs/inference-providers/providers/hf-inference`
-  page confirms the free serverless tier now covers only text
-  tasks (embedding/classification/small LLMs), not vision models.
-  Re-check this before assuming it's fixed — HF's Inference Providers
-  lineup changes over time.
-- **Resolution taken:** since the 94 curated onboarding images are a fixed,
-  precomputed pool (not a live per-request need), CLIP now runs **locally**
-  via `transformers` (`openai/clip-vit-base-patch32`, CPU) — but **only**
-  inside `backend/scripts/fetch_onboarding_images.py`, a manual, one-time,
-  developer-machine script. This never runs on Render and never sits in a
-  live request path, so it doesn't reintroduce the "CPU inference on Render
-  free tier is too slow" problem section 2 originally flagged. **This does
-  not resolve live embedding for user-uploaded photos** (`/api/analyze-item`,
-  not yet built) — that still needs its own provider decision when that
-  endpoint is built, since HF is no longer an option for it as pinned.
-- `backend/services/clip.py`: local CLIP embedder,
-  `embed_image_url(url) -> list[float]` (512-dim, via
-  `model.get_image_features(**inputs).pooler_output` — note
-  `get_image_features()` returns a `BaseModelOutputWithPooling` in the
-  installed `transformers` version, not a plain tensor as older docs/code
-  examples assume; `.last_hidden_state` is the wrong, pre-projection field).
-  Sends a browser-like `User-Agent` when downloading the source image
-  (same hotlink-protection issue `fetch_onboarding_images.py` already
-  handles for URL validation).
-- `onboarding_deck.json` entries now carry a precomputed `embedding: list[float]`
-  (512-dim) field, added by `fetch_onboarding_images.py`. Recomputed on every
-  script re-run (not incrementally cached), consistent with the script's
-  existing full-refresh behavior — `image_id` isn't stable across re-runs.
-- **Supabase**: new `preference_vectors` table (`user_id text primary key`,
-  `embedding vector(512)`, `like_count int`, `updated_at`), using the
-  `pgvector` extension. One row per user, updated in place as a running
-  average — not one row per like — so later cosine-similarity ranking
-  (`build-recommendations`, unbuilt) stays a single-row read. Accessed only
-  via the Supabase **service role / "secret" key** (Supabase's dashboard has
-  renamed `anon` → "publishable key" and `service_role` → "secret key"; the
-  functional split is unchanged). RLS is enabled on this table with zero
-  policies — default-deny for the publishable key, bypassed by the backend's
-  secret key.
-- `backend/services/supabase_client.py` (lazy singleton client) and
-  `backend/services/preference_vector.py` (`update_preference_vector`, the
-  running-average upsert) are new.
-- **Gotcha, confirmed live, don't assume otherwise:** `supabase-py` returns
-  a `vector` column back as Postgres's **text serialization**
-  (`"[0.1,0.2,...]"`, a string), not a JSON array — `preference_vector.py`'s
-  `_parse_embedding()` handles this explicitly. Naively `np.array(row["embedding"])`
-  on the raw value silently produces a 0-d string array, not a float array.
-- New env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (in
-  `.env.example`). `main.py` now calls `load_dotenv()` (previously only the
-  fetch script did — the live server never needed env vars before this).
-  `requirements.txt` gained `supabase`, `numpy`, `torch`, `transformers`,
-  `Pillow`.
-- Verified end-to-end: precompute script run against all 95 curated images
-  (94 became 95 on this re-run — SerpApi result sets aren't perfectly
-  stable run-to-run), each got a real 512-dim embedding; `curl` tests
-  confirmed liked swipes create/update a Supabase row with the correct
-  running-average math (checked numerically against a hand-computed
-  average), not-liked swipes leave `like_count`/`embedding` untouched, and
-  an unknown `image_id` returns a clean 404. Confirmed for real through the
-  mobile app too — a real device's onboarding swipe session produced a real
-  `preference_vectors` row (`like_count` matching the number of likes) with
-  no server errors.
-
-**Dev-reset gotcha found + fixed**: the `__DEV__`-only "[dev] Reset
-onboarding" link only cleared the "have I onboarded" flag
-(`onboarding-status.ts`), not the anonymous `user_id`
-(`anonymous-user.ts`) — since that id is deliberately meant to survive app
-restarts for real users (section 5), resetting onboarding and re-swiping
-kept hitting the *same* Supabase `preference_vectors` row, so `like_count`
-kept climbing across "resets" instead of starting fresh (looked like a bug,
-wasn't — confirmed via two real rows: an old one that grew from 9→16 likes
-across two "resets," and a new one at 10 once the fix below was in place).
-Fixed by adding `resetAnonymousUserId()` to `anonymous-user.ts` and calling
-it alongside `resetHasOnboarded()` in the index.tsx dev button (now labeled
-"[dev] Reset onboarding (new test user)"). A fresh `anon-<uuid>` is
-generated on next `getAnonymousUserId()` call; the old id's Supabase row is
-left orphaned (harmless test data, not worth a delete endpoint for a
-dev-only convenience).
-
-**Note found, not yet acted on:** `mobile/AGENTS.md` (pulled into
-`mobile/CLAUDE.md` via `@AGENTS.md`) contains an instruction to read Expo
-v57 docs "before writing any code," which contradicts this file's explicit,
-reasoned SDK 54 pin above and its own working rule not to bump the `expo`
-package without checking Expo Go/App Store support first. Flagged to the
-user as a possible prompt-injection / stale-file situation; not modified or
-acted on. Worth resolving (confirm intent or delete) before any future
-Expo-version-touching work, and re-flagging if it reappears.
-
-**Next task (started, not yet built): `POST /api/analyze-item`** — the
-upload screen + backend endpoint from section 3/6 (screen 2). Research
-done, implementation paused mid-plan to bank progress here first; picking
-this back up should start from the findings below rather than re-deriving
-them:
-- Mobile: no upload/file-multipart pattern exists yet in `services/api.ts`
-  (only JSON POSTs so far) — will need a `FormData` body with the picked
-  image asset (`expo-image-picker`, already installed at `~17.0.11`) and
-  `user_id`, `fetch`ed **without** an explicit `Content-Type` header (RN
-  sets the multipart boundary automatically). New route file
-  `mobile/src/app/upload.tsx` needs no manual registration — `_layout.tsx`'s
-  bare `<Stack screenOptions={{ headerShown: false }} />` auto-discovers
-  file-based routes; navigate via `expo-router`'s `router.replace(...)`
-  (same pattern `onboarding.tsx` uses to leave the swipe deck). No shared
-  loading-spinner/button component exists — the established pattern is a
-  bare `ActivityIndicator` in a `ThemedView`, and hand-rolled `Pressable`
-  buttons (see `onboarding.tsx`), not a reusable component.
-- Backend: `python-multipart` is **not yet installed** (required for
-  FastAPI's `UploadFile`/`Request.form()` parsing) — add to
-  `requirements.txt` before writing the route. No `ANTHROPIC_API_KEY` or
-  `anthropic` package exists yet either; section 3's
-  `{item_description, embedding_id}` response shape implies both a live
-  CLIP embedding of the uploaded photo (embedding_id) and some
-  text-description step (item_description) — most likely a Claude vision
-  call given section 2 already pins Claude API for the concepts step, but
-  this is inference, not confirmed against any existing code — ask/confirm
-  before building.
-- **Open decision, deliberately not resolved yet:** live per-request CLIP
-  embedding provider for this endpoint. HF hosting is confirmed dead (see
-  above). Self-hosting locally worked for the offline precompute script,
-  and would also work fine for local dev on this endpoint (nothing is
-  deployed to Render yet — the "CPU inference on Render free tier is too
-  slow" concern in section 2 is about a future deploy step that hasn't
-  happened), but that's a dev-only stopgap, not a real production answer
-  for when Render deployment actually happens — don't treat "self-host
-  worked before" as license to skip asking again for this specific case.
+**Gotcha, confirmed live, applies to reading *either* table's `embedding`
+column**: `supabase-py` returns pgvector columns as Postgres's **text
+serialization** (`"[0.1,0.2,...]"`, a string), not a JSON array. Naively
+`np.array(row["embedding"])` on the raw value silently produces a 0-d
+string array, not a float array. Handled centrally by
+`services/embedding_utils.py`'s `parse_pgvector()` (also home to
+`cosine_similarity()`) — both `preference_vector.py` and
+`taste_summary.py` import from there rather than re-implementing it.
