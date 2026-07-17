@@ -7,17 +7,18 @@ table (see backend/README/CLAUDE.md section 9 for the schema).
 
 import numpy as np
 
+from services.embedding_utils import parse_pgvector
 from services.supabase_client import get_supabase_client
 
 TABLE = "preference_vectors"
 
 
-def _parse_embedding(embedding: str | list[float]) -> np.ndarray:
-    # supabase-py returns pgvector columns as Postgres's text serialization
-    # ("[0.1,0.2,...]"), not a JSON array — confirmed live, not assumed.
-    if isinstance(embedding, str):
-        return np.array([float(x) for x in embedding.strip("[]").split(",")], dtype=np.float64)
-    return np.array(embedding, dtype=np.float64)
+def get_preference_vector(user_id: str) -> np.ndarray | None:
+    client = get_supabase_client()
+    result = client.table(TABLE).select("embedding").eq("user_id", user_id).execute()
+    if not result.data:
+        return None
+    return parse_pgvector(result.data[0]["embedding"])
 
 
 def update_preference_vector(user_id: str, new_embedding: list[float]) -> None:
@@ -32,7 +33,7 @@ def update_preference_vector(user_id: str, new_embedding: list[float]) -> None:
         return
 
     row = existing.data[0]
-    old_avg = _parse_embedding(row["embedding"])
+    old_avg = parse_pgvector(row["embedding"])
     old_count = row["like_count"]
     new_vec = np.array(new_embedding, dtype=np.float64)
 

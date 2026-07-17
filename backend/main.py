@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from routes import onboarding
+from routes import concepts, item, onboarding, recommendations
 
 app = FastAPI(title="Styling App API", version="0.1.0")
 
@@ -19,6 +19,9 @@ app.add_middleware(
 )
 
 app.include_router(onboarding.router, prefix="/api", tags=["onboarding"])
+app.include_router(item.router, prefix="/api", tags=["item"])
+app.include_router(concepts.router, prefix="/api", tags=["concepts"])
+app.include_router(recommendations.router, prefix="/api", tags=["recommendations"])
 
 
 @app.get("/health")

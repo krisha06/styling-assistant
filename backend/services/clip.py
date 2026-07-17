@@ -1,13 +1,20 @@
 """Local CLIP image embeddings (openai/clip-vit-base-patch32) via `transformers`.
 
-Runs entirely on-device (CPU) — used only by the offline, manually-run
-scripts/fetch_onboarding_images.py precompute step, never by the live FastAPI
-server on Render. HF's serverless Inference API no longer hosts any
-CLIP/image-embedding model (confirmed live: `inferenceProviderMapping` is
-empty for every CLIP checkpoint checked), so this only unblocks the
-precomputed curated-pool case — live per-request embedding for a future
-/api/analyze-item endpoint (real user-uploaded photos, not precomputable)
-needs its own decision when that endpoint gets built.
+Runs entirely on-device (CPU). Originally used only by the offline,
+manually-run scripts/fetch_onboarding_images.py precompute step — HF's
+serverless Inference API no longer hosts any CLIP/image-embedding model
+(confirmed live: `inferenceProviderMapping` is empty for every CLIP
+checkpoint checked), so self-hosting was the only free unblock for that
+script.
+
+Now also used live, in the FastAPI request path, by
+routes/item.py's /api/analyze-item (embed_image_bytes) — Replicate was
+evaluated as a hosted alternative for this live case and rejected (not
+actually free); self-hosting keeps the uploaded-photo embedding in the same
+vector space as the onboarding pool's precomputed embeddings for free, at
+the cost of slower per-request CPU inference. Revisit if this becomes a
+real bottleneck once deployed (Render free tier CPU speed is still an open
+question — see CLAUDE.md section 9).
 """
 
 import io
@@ -34,12 +41,9 @@ def _load_model() -> tuple[CLIPModel, CLIPProcessor]:
     return model, processor
 
 
-def embed_image_url(image_url: str) -> list[float]:
+def embed_image_bytes(image_bytes: bytes) -> list[float]:
     model, processor = _load_model()
-
-    resp = requests.get(image_url, headers=IMAGE_FETCH_HEADERS, timeout=15)
-    resp.raise_for_status()
-    image = Image.open(io.BytesIO(resp.content)).convert("RGB")
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
     inputs = processor(images=image, return_tensors="pt")
     with torch.no_grad():
@@ -50,3 +54,9 @@ def embed_image_url(image_url: str) -> list[float]:
         # output (768-dim x 50 tokens), not what we want.
         features = model.get_image_features(**inputs)
     return features.pooler_output[0].tolist()
+
+
+def embed_image_url(image_url: str) -> list[float]:
+    resp = requests.get(image_url, headers=IMAGE_FETCH_HEADERS, timeout=15)
+    resp.raise_for_status()
+    return embed_image_bytes(resp.content)
