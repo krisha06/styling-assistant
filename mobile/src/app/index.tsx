@@ -1,4 +1,4 @@
-import { Redirect } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable } from 'react-native';
 
@@ -27,13 +27,14 @@ export default function HomeScreen() {
     return <Redirect href="/onboarding" />;
   }
 
-  // Placeholder until the upload screen (CLAUDE.md section 6, screen 2) is built.
   return (
     <ThemedView style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.two }}>
       <ThemedText type="subtitle">Onboarding complete</ThemedText>
-      <ThemedText type="small" themeColor="textSecondary">
-        Upload screen goes here next
-      </ThemedText>
+      <Pressable onPress={() => router.push('/upload')} style={{ marginTop: Spacing.two }}>
+        <ThemedView type="backgroundSelected" style={{ borderRadius: Spacing.three, paddingVertical: Spacing.three, paddingHorizontal: Spacing.four }}>
+          <ThemedText>Upload a clothing item</ThemedText>
+        </ThemedView>
+      </Pressable>
       {__DEV__ && (
         <Pressable
           onPress={async () => {

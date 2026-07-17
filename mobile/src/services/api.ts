@@ -40,3 +40,84 @@ export async function postOnboardingSwipe(imageId: string, liked: boolean): Prom
   });
   if (!res.ok) throw new Error(`onboarding-swipe failed: ${res.status}`);
 }
+
+// Thrown instead of a bare Error for backend statuses that deserve a
+// friendlier message than the generic failure case — 429 (Gemini's
+// free-tier rate limit) and 503 (Gemini's servers temporarily overloaded,
+// surfaced after the backend's own single retry already failed).
+export class RateLimitedError extends Error {}
+export class OverloadedError extends Error {}
+
+function throwForStatus(res: Response, action: string): void {
+  if (res.status === 429) throw new RateLimitedError(`${action} rate limited`);
+  if (res.status === 503) throw new OverloadedError(`${action} overloaded`);
+  if (!res.ok) throw new Error(`${action} failed: ${res.status}`);
+}
+
+export type AnalyzeItemResult = {
+  item_description: string;
+  embedding_id: string;
+};
+
+export async function analyzeItem(imageUri: string): Promise<AnalyzeItemResult> {
+  const userId = await getAnonymousUserId();
+
+  const filename = imageUri.split('/').pop() ?? 'photo.jpg';
+  const extensionMatch = /\.(\w+)$/.exec(filename);
+  const mimeType = extensionMatch ? `image/${extensionMatch[1].toLowerCase()}` : 'image/jpeg';
+
+  const formData = new FormData();
+  // RN's FormData accepts { uri, name, type } in place of a Blob/File.
+  formData.append('image', { uri: imageUri, name: filename, type: mimeType } as unknown as Blob);
+  formData.append('user_id', userId);
+
+  // No explicit Content-Type header — RN sets the multipart boundary itself.
+  const res = await fetch(`${API_BASE_URL}/api/analyze-item`, {
+    method: 'POST',
+    body: formData,
+  });
+  throwForStatus(res, 'analyze-item');
+  return res.json();
+}
+
+export type Concept = {
+  vibe_label: string;
+  items: string[];
+  explanation: string;
+};
+
+export async function generateConcepts(itemDescription: string): Promise<Concept[]> {
+  const userId = await getAnonymousUserId();
+  const res = await fetch(`${API_BASE_URL}/api/generate-concepts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item_description: itemDescription, user_id: userId }),
+  });
+  throwForStatus(res, 'generate-concepts');
+  const { concepts } = await res.json();
+  return concepts;
+}
+
+export type RecommendationImage = {
+  item: string;
+  image_url: string;
+  source: string;
+};
+
+export type Recommendation = {
+  vibe_label: string;
+  explanation: string;
+  images: RecommendationImage[];
+};
+
+export async function buildRecommendations(concepts: Concept[]): Promise<Recommendation[]> {
+  const userId = await getAnonymousUserId();
+  const res = await fetch(`${API_BASE_URL}/api/build-recommendations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ concepts, user_id: userId }),
+  });
+  throwForStatus(res, 'build-recommendations');
+  const { recommendations } = await res.json();
+  return recommendations;
+}
