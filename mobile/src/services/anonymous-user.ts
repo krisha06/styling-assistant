@@ -18,3 +18,13 @@ export async function getAnonymousUserId(): Promise<string> {
   }
   return id;
 }
+
+// Dev-only convenience so "[dev] Reset onboarding" (index.tsx) can give a
+// true fresh-user test — without this, the same id (and its Supabase
+// preference vector) persists across onboarding resets by design, since
+// this id is meant to survive app restarts for real users (CLAUDE.md
+// section 5). A fresh random id is generated on the next getAnonymousUserId()
+// call; the old id's Supabase row is left orphaned (harmless test data).
+export async function resetAnonymousUserId(): Promise<void> {
+  await AsyncStorage.removeItem(ANONYMOUS_USER_ID_KEY);
+}

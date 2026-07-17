@@ -1,7 +1,12 @@
-from fastapi import APIRouter
+import logging
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.onboarding_deck import get_onboarding_deck
+from services.onboarding_deck import get_onboarding_deck, get_onboarding_image
+from services.preference_vector import update_preference_vector
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -33,12 +38,19 @@ def onboarding_deck() -> OnboardingDeckResponse:
 
 @router.post("/onboarding-swipe", response_model=OnboardingSwipeResponse)
 def onboarding_swipe(payload: OnboardingSwipeRequest) -> OnboardingSwipeResponse:
-    # --- STUB ---
-    # TODO(real-CLIP-integration): per CLAUDE.md section 1 steps 1-3, this
-    # should embed the swiped image (or look up a precomputed embedding for
-    # this curated onboarding image_id) via the Hugging Face CLIP API, and
-    # if liked, fold it into payload.user_id's running preference-vector
-    # average in Supabase. Currently: no HF/CLIP call, no vector math, no
-    # persistence — validates the payload and logs only.
-    print(f"[stub] onboarding-swipe: user={payload.user_id} image={payload.image_id} liked={payload.liked}")
+    image = get_onboarding_image(payload.image_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail=f"Unknown onboarding image_id: {payload.image_id}")
+
+    # Per CLAUDE.md section 1 point 2: only liked embeddings are averaged
+    # into the preference vector. Passes are acknowledged but ignored.
+    if not payload.liked:
+        return OnboardingSwipeResponse(status="ok")
+
+    try:
+        update_preference_vector(payload.user_id, image["embedding"])
+    except Exception:
+        logger.exception("Failed to update preference vector for user_id=%s", payload.user_id)
+        raise HTTPException(status_code=500, detail="Failed to update preference vector")
+
     return OnboardingSwipeResponse(status="ok")

@@ -446,3 +446,142 @@ inevitable even with the validation above. `onboarding.tsx` now has a
 `SwipeCard` component with an `onError` handler on the `expo-image` — a
 failed load shows a labeled "Image unavailable" placeholder instead of a
 blank card.
+
+---
+
+**`POST /api/onboarding-swipe` is now real** (was previously the last
+documented stub in section 3/9). Implements CLAUDE.md section 1 steps 1-3:
+liked swipes are folded into a running-average preference vector per user,
+stored in Supabase; passes are acknowledged but never touch the vector.
+
+- **Stack deviation from section 2, done with explicit sign-off (not a
+  silent substitution):** section 2 pins "CLIP via Hugging Face Inference
+  API," but as of this work, HF's serverless Inference API **no longer
+  hosts any CLIP or image-embedding model at all** — confirmed live via
+  `curl https://huggingface.co/api/models/openai/clip-vit-base-patch32?expand=inferenceProviderMapping`,
+  which returns an empty `inferenceProviderMapping` (checked several other
+  CLIP/image-embedding checkpoints too — same result). The
+  `api-inference.huggingface.co` domain used by the old REST pattern no
+  longer even resolves; HF's `docs/inference-providers/providers/hf-inference`
+  page confirms the free serverless tier now covers only text
+  tasks (embedding/classification/small LLMs), not vision models.
+  Re-check this before assuming it's fixed — HF's Inference Providers
+  lineup changes over time.
+- **Resolution taken:** since the 94 curated onboarding images are a fixed,
+  precomputed pool (not a live per-request need), CLIP now runs **locally**
+  via `transformers` (`openai/clip-vit-base-patch32`, CPU) — but **only**
+  inside `backend/scripts/fetch_onboarding_images.py`, a manual, one-time,
+  developer-machine script. This never runs on Render and never sits in a
+  live request path, so it doesn't reintroduce the "CPU inference on Render
+  free tier is too slow" problem section 2 originally flagged. **This does
+  not resolve live embedding for user-uploaded photos** (`/api/analyze-item`,
+  not yet built) — that still needs its own provider decision when that
+  endpoint is built, since HF is no longer an option for it as pinned.
+- `backend/services/clip.py`: local CLIP embedder,
+  `embed_image_url(url) -> list[float]` (512-dim, via
+  `model.get_image_features(**inputs).pooler_output` — note
+  `get_image_features()` returns a `BaseModelOutputWithPooling` in the
+  installed `transformers` version, not a plain tensor as older docs/code
+  examples assume; `.last_hidden_state` is the wrong, pre-projection field).
+  Sends a browser-like `User-Agent` when downloading the source image
+  (same hotlink-protection issue `fetch_onboarding_images.py` already
+  handles for URL validation).
+- `onboarding_deck.json` entries now carry a precomputed `embedding: list[float]`
+  (512-dim) field, added by `fetch_onboarding_images.py`. Recomputed on every
+  script re-run (not incrementally cached), consistent with the script's
+  existing full-refresh behavior — `image_id` isn't stable across re-runs.
+- **Supabase**: new `preference_vectors` table (`user_id text primary key`,
+  `embedding vector(512)`, `like_count int`, `updated_at`), using the
+  `pgvector` extension. One row per user, updated in place as a running
+  average — not one row per like — so later cosine-similarity ranking
+  (`build-recommendations`, unbuilt) stays a single-row read. Accessed only
+  via the Supabase **service role / "secret" key** (Supabase's dashboard has
+  renamed `anon` → "publishable key" and `service_role` → "secret key"; the
+  functional split is unchanged). RLS is enabled on this table with zero
+  policies — default-deny for the publishable key, bypassed by the backend's
+  secret key.
+- `backend/services/supabase_client.py` (lazy singleton client) and
+  `backend/services/preference_vector.py` (`update_preference_vector`, the
+  running-average upsert) are new.
+- **Gotcha, confirmed live, don't assume otherwise:** `supabase-py` returns
+  a `vector` column back as Postgres's **text serialization**
+  (`"[0.1,0.2,...]"`, a string), not a JSON array — `preference_vector.py`'s
+  `_parse_embedding()` handles this explicitly. Naively `np.array(row["embedding"])`
+  on the raw value silently produces a 0-d string array, not a float array.
+- New env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (in
+  `.env.example`). `main.py` now calls `load_dotenv()` (previously only the
+  fetch script did — the live server never needed env vars before this).
+  `requirements.txt` gained `supabase`, `numpy`, `torch`, `transformers`,
+  `Pillow`.
+- Verified end-to-end: precompute script run against all 95 curated images
+  (94 became 95 on this re-run — SerpApi result sets aren't perfectly
+  stable run-to-run), each got a real 512-dim embedding; `curl` tests
+  confirmed liked swipes create/update a Supabase row with the correct
+  running-average math (checked numerically against a hand-computed
+  average), not-liked swipes leave `like_count`/`embedding` untouched, and
+  an unknown `image_id` returns a clean 404. Confirmed for real through the
+  mobile app too — a real device's onboarding swipe session produced a real
+  `preference_vectors` row (`like_count` matching the number of likes) with
+  no server errors.
+
+**Dev-reset gotcha found + fixed**: the `__DEV__`-only "[dev] Reset
+onboarding" link only cleared the "have I onboarded" flag
+(`onboarding-status.ts`), not the anonymous `user_id`
+(`anonymous-user.ts`) — since that id is deliberately meant to survive app
+restarts for real users (section 5), resetting onboarding and re-swiping
+kept hitting the *same* Supabase `preference_vectors` row, so `like_count`
+kept climbing across "resets" instead of starting fresh (looked like a bug,
+wasn't — confirmed via two real rows: an old one that grew from 9→16 likes
+across two "resets," and a new one at 10 once the fix below was in place).
+Fixed by adding `resetAnonymousUserId()` to `anonymous-user.ts` and calling
+it alongside `resetHasOnboarded()` in the index.tsx dev button (now labeled
+"[dev] Reset onboarding (new test user)"). A fresh `anon-<uuid>` is
+generated on next `getAnonymousUserId()` call; the old id's Supabase row is
+left orphaned (harmless test data, not worth a delete endpoint for a
+dev-only convenience).
+
+**Note found, not yet acted on:** `mobile/AGENTS.md` (pulled into
+`mobile/CLAUDE.md` via `@AGENTS.md`) contains an instruction to read Expo
+v57 docs "before writing any code," which contradicts this file's explicit,
+reasoned SDK 54 pin above and its own working rule not to bump the `expo`
+package without checking Expo Go/App Store support first. Flagged to the
+user as a possible prompt-injection / stale-file situation; not modified or
+acted on. Worth resolving (confirm intent or delete) before any future
+Expo-version-touching work, and re-flagging if it reappears.
+
+**Next task (started, not yet built): `POST /api/analyze-item`** — the
+upload screen + backend endpoint from section 3/6 (screen 2). Research
+done, implementation paused mid-plan to bank progress here first; picking
+this back up should start from the findings below rather than re-deriving
+them:
+- Mobile: no upload/file-multipart pattern exists yet in `services/api.ts`
+  (only JSON POSTs so far) — will need a `FormData` body with the picked
+  image asset (`expo-image-picker`, already installed at `~17.0.11`) and
+  `user_id`, `fetch`ed **without** an explicit `Content-Type` header (RN
+  sets the multipart boundary automatically). New route file
+  `mobile/src/app/upload.tsx` needs no manual registration — `_layout.tsx`'s
+  bare `<Stack screenOptions={{ headerShown: false }} />` auto-discovers
+  file-based routes; navigate via `expo-router`'s `router.replace(...)`
+  (same pattern `onboarding.tsx` uses to leave the swipe deck). No shared
+  loading-spinner/button component exists — the established pattern is a
+  bare `ActivityIndicator` in a `ThemedView`, and hand-rolled `Pressable`
+  buttons (see `onboarding.tsx`), not a reusable component.
+- Backend: `python-multipart` is **not yet installed** (required for
+  FastAPI's `UploadFile`/`Request.form()` parsing) — add to
+  `requirements.txt` before writing the route. No `ANTHROPIC_API_KEY` or
+  `anthropic` package exists yet either; section 3's
+  `{item_description, embedding_id}` response shape implies both a live
+  CLIP embedding of the uploaded photo (embedding_id) and some
+  text-description step (item_description) — most likely a Claude vision
+  call given section 2 already pins Claude API for the concepts step, but
+  this is inference, not confirmed against any existing code — ask/confirm
+  before building.
+- **Open decision, deliberately not resolved yet:** live per-request CLIP
+  embedding provider for this endpoint. HF hosting is confirmed dead (see
+  above). Self-hosting locally worked for the offline precompute script,
+  and would also work fine for local dev on this endpoint (nothing is
+  deployed to Render yet — the "CPU inference on Render free tier is too
+  slow" concern in section 2 is about a future deploy step that hasn't
+  happened), but that's a dev-only stopgap, not a real production answer
+  for when Render deployment actually happens — don't treat "self-host
+  worked before" as license to skip asking again for this specific case.

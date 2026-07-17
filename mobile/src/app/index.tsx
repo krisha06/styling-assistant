@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
+import { resetAnonymousUserId } from '@/services/anonymous-user';
 import { getHasOnboarded, resetHasOnboarded } from '@/services/onboarding-status';
 
 export default function HomeScreen() {
@@ -37,11 +38,12 @@ export default function HomeScreen() {
         <Pressable
           onPress={async () => {
             await resetHasOnboarded();
+            await resetAnonymousUserId();
             setHasOnboarded(false);
           }}
           style={{ marginTop: Spacing.four }}>
           <ThemedText type="small" themeColor="textSecondary">
-            [dev] Reset onboarding
+            [dev] Reset onboarding (new test user)
           </ThemedText>
         </Pressable>
       )}

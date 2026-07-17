@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from services.clip import embed_image_url  # noqa: E402  (needs load_dotenv() first)
+
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
 IMAGES_PER_TAG = 6
 OUTPUT_PATH = Path(__file__).parent.parent / "services" / "onboarding_deck.json"
@@ -134,6 +136,21 @@ def fetch_images_for_tag(tag: str, query: str) -> list[dict]:
     return images
 
 
+def embed_images(images: list[dict]) -> None:
+    # Recomputed on every run, same as the rest of this script — image_id
+    # isn't guaranteed stable across re-runs, so caching against a previous
+    # onboarding_deck.json would be unsound. 94 sequential local CLIP
+    # forward-passes is a small one-time cost for a manually-run script (the
+    # first call is slow — it downloads the ~600MB model weights once).
+    for i, image in enumerate(images, start=1):
+        print(f"  embedding {i}/{len(images)}: {image['image_id']}")
+        try:
+            image["embedding"] = embed_image_url(image["image_url"])
+        except Exception as e:
+            print(f"    failed: {e}", file=sys.stderr)
+            image["embedding"] = None
+
+
 def main() -> None:
     if not SERPAPI_KEY:
         print("SERPAPI_KEY not set. Add it to backend/.env (see .env.example).", file=sys.stderr)
@@ -156,6 +173,13 @@ def main() -> None:
             seen_urls.add(image["image_url"])
             all_images.append(image)
         print(f"  got {len(images)} images")
+
+    print(f"\nEmbedding {len(all_images)} images via local CLIP...")
+    embed_images(all_images)
+    failed = [img["image_id"] for img in all_images if img["embedding"] is None]
+    all_images = [img for img in all_images if img["embedding"] is not None]
+    if failed:
+        print(f"  {len(failed)} image(s) dropped after embedding failure: {failed}", file=sys.stderr)
 
     OUTPUT_PATH.write_text(json.dumps(all_images, indent=2))
     print(f"\nWrote {len(all_images)} images to {OUTPUT_PATH}")
