@@ -42,11 +42,14 @@ core mechanism, augmented by an LLM for the concept-generation step:
 2. **Preference vector**: average all "liked" embeddings into one vector per
    user — a running taste centroid — stored in Supabase. A weighted
    average, not a trained model. **Built and working.**
-3. **Ongoing learning**: every like/pass on a generated recommendation
-   should update that vector. **Not built** — there is no like/pass UI on
-   recommendations and no `/api/recommendation-feedback` endpoint yet (see
-   section 4's Phase 1 status). Currently the preference vector only grows
-   from onboarding swipes.
+3. **Ongoing learning**: every like on a generated recommendation updates
+   that vector. **Built.** A heart icon on each outfit concept card (not a
+   like/pass pair — see section 9's design note) calls
+   `/api/recommendation-feedback`, which embeds each of that concept's
+   reference images and folds them into the running average the same way
+   an onboarding swipe does. Verified live: liking one concept card (4
+   item images) moved a real user's `like_count` from 14 to 18 — see
+   section 9.
 4. **Applying it — amended from the original plan.** The original plan was
    to rank *candidate outfit-photo images* by cosine similarity to the
    preference vector. In practice, full-outfit reference photos (searched
@@ -110,8 +113,7 @@ rejected in favor of what's in this table now. See section 9.)
 
 ## 3. Backend API contract
 
-All five endpoints below are documented as actually implemented and
-verified live, except `recommendation-feedback`, which does not exist yet.
+All six endpoints below are real, implemented, and verified live.
 
 ```
 POST /api/onboarding-deck
@@ -164,13 +166,20 @@ POST /api/build-recommendations
   // user_id is accepted for contract-symmetry with the other endpoints
   // but currently unused (no ranking happens here to feed it into).
 
-POST /api/recommendation-feedback   ← NOT BUILT
-  body: { user_id: string, recommendation_id: string, liked: boolean }
+POST /api/recommendation-feedback
+  body: { user_id: string, image_urls: string[] }
   → { status: "ok" }
-  // Same underlying update as onboarding-swipe would be. Blocked on
-  // there being no like/pass UI on recommendations yet, and no
-  // recommendation_id concept in the current build-recommendations
-  // response (recommendations aren't persisted or ID'd right now).
+  // Real. Shape differs from the original plan — no recommendation_id,
+  // since recommendations still aren't persisted anywhere. The mobile
+  // client instead sends back the image_urls it already has for the
+  // liked concept card; each gets independently re-embedded via CLIP and
+  // folded into the running-average preference vector — same
+  // update_preference_vector() call onboarding-swipe already uses, just
+  // once per liked reference image instead of once per swipe. No
+  // explicit "pass" call — not tapping the like heart is already a
+  // no-op, same as a swipe pass never touching the vector. Best-effort:
+  // an image that fails to re-embed (dead link since it was shown) is
+  // skipped, not a hard failure — verified live (see section 9).
 ```
 
 ---
@@ -178,32 +187,35 @@ POST /api/recommendation-feedback   ← NOT BUILT
 ## 4. Phased build plan
 
 **Phase 1 — swipe onboarding + core recommendation loop (target: end of
-June) — IN PROGRESS, not complete.** Status as of this update:
+June) — nearly complete.** Status as of this update:
 
 - ✅ Onboarding swipe deck (style/age self-select → curated pool → session
   deck), builds a real preference vector.
 - ✅ Upload/take photo → CLIP embedding + Gemini description → Gemini
   generates 3-4 concepts (taste-biased) → per-item reference images shown
   per concept.
+- ✅ **Like on each recommendation updates the preference vector.** Built
+  as a single heart icon per concept card, not a like/pass pair (see
+  section 9 for why that's still faithful to the original mechanism). The
+  "ongoing learning" mechanism (section 1 point 3) is live — verified on
+  a real device, a real like moved a real user's vector.
 - ❌ **Anonymous auth on first launch** — still a local-only stand-in, not
-  real Supabase anonymous auth (see section 2's Auth row).
-- ❌ **Like/pass on each recommendation updates the preference vector** —
-  not built at all. No like/pass UI, no `/api/recommendation-feedback`.
-  This means the "ongoing learning" mechanism (section 1 point 3) doesn't
-  exist yet — the preference vector currently only grows from onboarding.
+  real Supabase anonymous auth (see section 2's Auth row). **This is now
+  the only remaining Phase 1 gap.**
 - ⚠️ **Success criterion ("recommendations visibly weighted toward
-  onboarding choices")** — partially true. Verified that *which items get
-  suggested* is taste-biased (section 9's before/after example). *Which
-  specific photo* represents each item is not taste-ranked (deliberately
-  dropped, section 1 point 4) — this is a narrower personalization signal
-  than originally specified, though the original signal (ranking
-  full-outfit photos) is what got dropped for a good reason (looked worse,
-  slower).
+  onboarding choices")** — mostly true now. *Which items get suggested* is
+  taste-biased (section 9's before/after example), and that bias now keeps
+  compounding post-onboarding via the like loop above. *Which specific
+  photo* represents each item is still not taste-ranked (deliberately
+  dropped, section 1 point 4) — a narrower personalization signal than
+  originally specified, but the tradeoff that produced it (better-looking,
+  faster results) still holds.
 
-**What's left to close out Phase 1 properly:** the like/pass +
-recommendation-feedback loop, and a decision on whether to build real
-anonymous Supabase auth now or explicitly defer it into Phase 2's account
-work. Neither has been discussed yet — ask before assuming either way.
+**What's left to close out Phase 1 properly:** just the anonymous-auth
+decision — build real Supabase anonymous sign-in now, or explicitly defer
+it into Phase 2's account work (Phase 2 needs real accounts anyway, so
+there's a real case for doing both together). Not discussed yet — ask
+before assuming either way.
 
 **Phase 2 — user accounts + persistence + polish (target: mid-July)**
 - Real signup/login (email/password, and/or social sign-in if time allows),
@@ -241,6 +253,30 @@ work. Neither has been discussed yet — ask before assuming either way.
   swipe/like data already does the core job.
 - OAuth via `expo-auth-session` (not a plain web redirect — required for
   mobile OAuth to return to the app correctly).
+- **Reconsidered and reaffirmed at this phase, not moved earlier.** The
+  idea of adding this to onboarding instead (replacing/supplementing the
+  swipe deck at first launch, so a new user could import taste data
+  immediately) came up during Phase 1. Decided against moving it that
+  early — two reasons, not just "the plan already said Phase 4":
+  1. **No hard technical dependency on Phase 2, but a practical one.**
+     Pinterest OAuth is independent of this app's own auth (it's a
+     separate third-party connection, not how a user logs in) — it
+     doesn't strictly *require* Phase 2's real accounts to exist. But
+     Phase 2 is what proves the anonymous→permanent preference-vector
+     migration actually works (section 4's Phase 2 entry). A Pinterest
+     import could seed a much richer vector than ~20 onboarding swipes —
+     worth building on a migration path that's already been verified,
+     not one still unproven.
+  2. **A Pinterest connection belongs to a durable account, not a
+     throwaway anonymous session.** Going through Pinterest's OAuth
+     consent flow only to have the result tied to a local anonymous id
+     that could reset (dev-only today, but the underlying fragility is
+     real) feels wrong product-wise — it's the kind of one-time setup a
+     user expects to persist.
+  Net: keep this as Phase 4, after both Phase 2 (accounts/migration) and
+  Phase 3 (preference tuning) — matches the cut-order below, which
+  already ranked it lowest-priority for other reasons; this just adds the
+  "why," confirmed deliberately rather than left as an untouched default.
 
 **Phase 5 — buffer + demo prep (Aug)**
 - Bug fixes, demo video, portfolio writeup.
@@ -252,10 +288,12 @@ UI polish. Phase 1 cannot be cut — it's the entire product.
 
 ## 5. Risks — status
 
-- **Cold-start problem** (still open) — a small onboarding sample means
-  recommendations right after onboarding may feel generic until real-use
-  likes accumulate, and there's currently no post-onboarding feedback loop
-  at all (Phase 1 gap above) to accumulate more.
+- **Cold-start problem** (partially addressed) — a small onboarding sample
+  still means recommendations right after onboarding may feel generic. The
+  post-onboarding feedback loop that accumulates more signal over time is
+  now built (section 1 point 3), so this should self-correct with real
+  usage — not independently verified yet that it actually *feels* better
+  after a batch of real likes, just that the mechanism works.
 - **Google Images API coverage/reliability/response fields** — ✅ resolved.
   Confirmed live against SerpApi; real field names documented in section 3.
 - **HF Inference API** — ✅ resolved by moving off it entirely (section 2).
@@ -299,13 +337,13 @@ continuous async operation with three loading stages).
 2. **Upload screen** (`mobile/src/app/upload.tsx`) — **combines the
    original screens 2, 3, and 4.** Camera/library picker → three
    sequential loading stages (Identifying the piece → Generating outfit
-   ideas → Finding references) → outfit concept cards, each with a
-   swipeable image carousel (one item photo at a time, dot pagination,
-   captioned with the item name) and an explanation. No like/pass — see
-   section 4's Phase 1 gap. Ends with a "Done" link back to `/`.
-   **This is a temporary combined-screen shape**, not a deliberate final
-   design — revisit if/when a dedicated Recommendations screen with
-   like/pass gets built.
+   ideas → Finding references) → outfit concept cards, each with a heart
+   icon (like only, no explicit pass — see section 9) next to the vibe
+   label, a swipeable image carousel (one item photo at a time, dot
+   pagination, captioned with the item name), and an explanation. Ends
+   with a "Done" link back to `/`. **This is a temporary combined-screen
+   shape**, not a deliberate final design — revisit if/when a dedicated
+   Recommendations screen gets built.
 3. *(Phase 2)* **Login/signup screens** — email/password (and/or social),
    with anonymous-to-permanent account linking on signup.
 4. *(Phase 2)* **History screen** — past recommendations from Supabase.
@@ -385,7 +423,9 @@ gotchas, and reasoning that's too granular for the main sections.
   before any future Expo-version-touching work.
 - Key package versions: `expo ^54.0.0`, `react-native 0.81.5`,
   `expo-router ~6.0.24`, `expo-image-picker ~17.0.11`,
-  `expo-crypto ~15.0.9`, `react-native-deck-swiper ^2.0.19`.
+  `expo-crypto ~15.0.9`, `expo-symbols ~1.0.8` (installed since the
+  initial scaffold, first actually used for the recommendation-feedback
+  heart icon), `react-native-deck-swiper ^2.0.19`.
 - Backend: Python 3.13, FastAPI, local `.venv` in `backend/`.
   `requirements.txt`: `fastapi`, `uvicorn[standard]`, `requests`,
   `python-dotenv`, `supabase`, `numpy`, `torch`, `transformers`, `Pillow`,
@@ -587,6 +627,48 @@ given the just-made cost-driven swap on the sibling endpoint).
   can report differently than GET for redirecting URLs — `requests.get()`
   with default redirect-following is what the backend actually uses and
   what should be used to verify, not a plain HEAD).
+
+**`/api/recommendation-feedback`** (`routes/recommendation_feedback.py`)
+— real, closes section 1 point 3's "ongoing learning" gap.
+- **Heart-only UI, no explicit pass — and this is still faithful to the
+  original mechanism, not a shortcut.** Onboarding-swipe's pass action was
+  already a no-op for the vector (only likes fold in); a dedicated "pass"
+  button on recommendations would have had nothing to actually do either.
+  So `upload.tsx` got a single heart icon (`expo-symbols`' `SymbolView`,
+  `"heart"`/`"heart.fill"`, with a text-glyph `fallback` for
+  Android/web where SF Symbols don't render) per concept card instead of
+  a like/pass pair. Liking is one-way — the running average isn't
+  reversible without a like-history table (doesn't exist), so there's no
+  unlike/undo; a second tap on an already-liked card is a no-op.
+- **No `recommendation_id` — recommendations still aren't persisted
+  anywhere.** Section 3's original contract assumed one; instead, liking a
+  card sends back the `image_urls` mobile already has in state for that
+  concept (up to 4, from `build-recommendations`). The backend re-embeds
+  each independently via CLIP (`embed_image_url` — same function
+  `build-recommendations` and the onboarding precompute script use) and
+  calls `update_preference_vector()` once per image — the exact same
+  function and running-average math onboarding-swipe already uses, no new
+  vector logic written. Best-effort: an image that fails to re-embed
+  (e.g. link rot since it was shown) is logged and skipped, not a hard
+  failure — the whole point of a "like" tap is that it shouldn't be able
+  to visibly fail.
+- Mobile: `sendRecommendationFeedback()` is fire-and-forget from
+  `upload.tsx` — the heart fills in immediately on tap (optimistic,
+  local `Set<string>` of liked `vibe_label`s) and the network call's
+  errors are silently swallowed, not surfaced as an error UI. A failed
+  "like" isn't worth interrupting the user over.
+- **Verified end-to-end on a real device, including a real gotcha found
+  while verifying:** `preference_vectors.updated_at` does **not** actually
+  update on a like — `update_preference_vector()`'s `.update()` call never
+  sets it explicitly, and there's no database trigger to bump it
+  automatically, so it silently reflects row-creation time only. Ordering
+  by `updated_at` to find "the row that just changed" doesn't work — had
+  to take an explicit before/after `like_count` snapshot instead to
+  confirm the real device's row. Confirmed for real this way: one heart
+  tap (a 4-image concept card) moved a real user's `like_count` from 14
+  to 18 — exactly the expected +4. Worth fixing `updated_at` properly
+  (explicit `now()` on update, or a trigger) before this gap causes real
+  confusion later; not fixed yet, just documented.
 
 **Gemini reliability** (`services/gemini_client.py`,
 `services/gemini_errors.py`) — shared across every Gemini call site:
