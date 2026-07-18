@@ -121,3 +121,17 @@ export async function buildRecommendations(concepts: Concept[]): Promise<Recomme
   const { recommendations } = await res.json();
   return recommendations;
 }
+
+// Recommendations aren't persisted anywhere, so there's no
+// recommendation_id to send — instead this sends back the image_urls the
+// liked card already has in hand, and the backend re-embeds each one via
+// CLIP and folds it into the running-average preference vector.
+export async function sendRecommendationFeedback(imageUrls: string[]): Promise<void> {
+  const userId = await getAnonymousUserId();
+  const res = await fetch(`${API_BASE_URL}/api/recommendation-feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, image_urls: imageUrls }),
+  });
+  throwForStatus(res, 'recommendation-feedback');
+}

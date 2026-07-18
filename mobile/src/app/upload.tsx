@@ -1,6 +1,7 @@
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -24,7 +25,32 @@ import {
   RateLimitedError,
   type Recommendation,
   type RecommendationImage,
+  sendRecommendationFeedback,
 } from '@/services/api';
+
+const LIKE_COLOR = '#E0455F';
+
+// No explicit "pass" action — a pass is just not tapping the heart, which
+// already matches how the preference vector works (only likes fold in).
+// Once liked, stays liked — the running average isn't reversible, so
+// there's no undo. Fires the feedback call best-effort: a failed network
+// call isn't worth surfacing an error for a "like" tap.
+function LikeButton({ liked, onPress }: { liked: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} hitSlop={8}>
+      <SymbolView
+        name={liked ? 'heart.fill' : 'heart'}
+        size={22}
+        tintColor={liked ? LIKE_COLOR : undefined}
+        fallback={
+          <ThemedText type="subtitle" style={liked && { color: LIKE_COLOR }}>
+            {liked ? '♥' : '♡'}
+          </ThemedText>
+        }
+      />
+    </Pressable>
+  );
+}
 
 type Stage = 'idle' | 'analyzing' | 'generating-concepts' | 'finding-references' | 'done';
 
@@ -109,6 +135,15 @@ export default function UploadScreen() {
   const [stage, setStage] = useState<Stage>('idle');
   const [error, setError] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
+  const [likedConcepts, setLikedConcepts] = useState<Set<string>>(new Set());
+
+  function handleLike(rec: Recommendation) {
+    if (likedConcepts.has(rec.vibe_label)) return;
+    setLikedConcepts((prev) => new Set(prev).add(rec.vibe_label));
+    sendRecommendationFeedback(rec.images.map((image) => image.image_url)).catch(() => {
+      // Best-effort — the heart already shows liked; not worth an error UI for this.
+    });
+  }
 
   async function handlePick(fromCamera: boolean) {
     setError(null);
@@ -128,6 +163,7 @@ export default function UploadScreen() {
 
     const uri = pickerResult.assets[0].uri;
     setRecommendations(null);
+    setLikedConcepts(new Set());
     setStage('analyzing');
     try {
       const { item_description } = await analyzeItem(uri);
@@ -172,7 +208,10 @@ export default function UploadScreen() {
         <ThemedText type="subtitle">Outfit ideas</ThemedText>
         {recommendations.map((rec) => (
           <ThemedView key={rec.vibe_label} type="backgroundElement" style={styles.resultCard}>
-            <ThemedText type="smallBold">{rec.vibe_label}</ThemedText>
+            <View style={styles.cardHeader}>
+              <ThemedText type="smallBold">{rec.vibe_label}</ThemedText>
+              <LikeButton liked={likedConcepts.has(rec.vibe_label)} onPress={() => handleLike(rec)} />
+            </View>
             <ThemedText>{rec.explanation}</ThemedText>
             <ImageCarousel images={rec.images} />
           </ThemedView>
@@ -242,6 +281,11 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.three,
     padding: Spacing.four,
     gap: Spacing.two,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   imagePage: {
     gap: Spacing.one,
