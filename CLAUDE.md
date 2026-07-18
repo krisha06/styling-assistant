@@ -100,7 +100,7 @@ reasoning behind each one, not a silent substitution).
 | Item embeddings (CLIP) | **Self-hosted locally**, via `transformers` (`openai/clip-vit-base-patch32`), CPU | Changed from the original HF Inference API plan — HF's serverless tier no longer hosts any CLIP/image-embedding model at all (confirmed dead, section 9). Replicate was also considered and rejected (not actually free). Runs both in the one-time onboarding-pool precompute script and live in `/api/analyze-item`'s request path. **Render-deploy CPU speed is unverified** — everything so far has run on a dev laptop. |
 | Item description + outfit concepts | **Gemini API** (`gemini-3.5-flash`), via the `google-genai` package | Changed from the original Claude/Sonnet plan — ruled out for cost (Gemini has a usable free tier; Claude and Replicate do not). This is the current provider for both `/api/analyze-item`'s description and `/api/generate-concepts`. **Claude is not used anywhere in the built code.** |
 | Reference images | Google Images via SerpApi | Confirmed live, real field names (section 9). Searches per individual clothing item (product/flat-lay style), not per full outfit — see section 1 point 4. No ranking model involved — first live result wins. |
-| Auth | **Not yet real.** Local-only anonymous user id (`AsyncStorage` + `expo-crypto` UUID) | Real Supabase anonymous sign-in (as originally planned for Phase 1) has not been built. This is a known gap — see section 4. |
+| Auth | **Not yet real, and that's fine for Phase 1.** Local-only anonymous user id (`AsyncStorage` + `expo-crypto` UUID) | Real Supabase anonymous sign-in was originally Phase 1 scope, deliberately moved to Phase 2 (see section 4) — bundled with real permanent auth and the anonymous→permanent migration, rather than building anonymous auth twice. |
 | DB/storage | Supabase (Postgres + `pgvector`) | Two tables so far: `preference_vectors`, `analyzed_items` — see section 9 for schema. Both created by hand via the Supabase SQL editor; no migration tooling in this repo. |
 | Deploy (dev) | None needed | Expo Go + a local FastAPI process (`--host 0.0.0.0` so a phone on the same LAN can reach it) covers all of development so far |
 
@@ -187,7 +187,7 @@ POST /api/recommendation-feedback
 ## 4. Phased build plan
 
 **Phase 1 — swipe onboarding + core recommendation loop (target: end of
-June) — nearly complete.** Status as of this update:
+June) — complete, as rescoped.** Status as of this update:
 
 - ✅ Onboarding swipe deck (style/age self-select → curated pool → session
   deck), builds a real preference vector.
@@ -199,11 +199,15 @@ June) — nearly complete.** Status as of this update:
   section 9 for why that's still faithful to the original mechanism). The
   "ongoing learning" mechanism (section 1 point 3) is live — verified on
   a real device, a real like moved a real user's vector.
-- ❌ **Anonymous auth on first launch** — still a local-only stand-in, not
-  real Supabase anonymous auth (see section 2's Auth row). **This is now
-  the only remaining Phase 1 gap.**
+- **Rescoped, not a gap: real anonymous Supabase auth moved to Phase 2.**
+  Originally listed as Phase 1 scope; explicitly moved after Phase 1's
+  other work was done, on the reasoning that it belongs with Phase 2's
+  auth work anyway (see Phase 2 below — building real anonymous auth
+  in isolation now would mean rebuilding auth again for the
+  anonymous→permanent migration shortly after). The local-only anonymous
+  id stand-in (section 2's Auth row) is what Phase 1 actually ships with.
 - ⚠️ **Success criterion ("recommendations visibly weighted toward
-  onboarding choices")** — mostly true now. *Which items get suggested* is
+  onboarding choices")** — mostly true. *Which items get suggested* is
   taste-biased (section 9's before/after example), and that bias now keeps
   compounding post-onboarding via the like loop above. *Which specific
   photo* represents each item is still not taste-ranked (deliberately
@@ -211,23 +215,19 @@ June) — nearly complete.** Status as of this update:
   originally specified, but the tradeoff that produced it (better-looking,
   faster results) still holds.
 
-**What's left to close out Phase 1 properly:** just the anonymous-auth
-decision — build real Supabase anonymous sign-in now, or explicitly defer
-it into Phase 2's account work (Phase 2 needs real accounts anyway, so
-there's a real case for doing both together). Not discussed yet — ask
-before assuming either way.
-
 **Phase 2 — user accounts + persistence + polish (target: mid-July)**
-- Real signup/login (email/password, and/or social sign-in if time allows),
-  replacing reliance on anonymous-only auth from Phase 1.
+- **Real anonymous Supabase sign-in — moved here from Phase 1.** Phase 1
+  shipped on a local-only anonymous id stand-in instead (section 2's Auth
+  row); this phase needs to build both real anonymous auth *and* real
+  permanent auth *and* the migration between them, since building real
+  anonymous auth in isolation earlier would have meant touching auth code
+  twice.
+- Real signup/login (email/password, and/or social sign-in if time allows).
 - Migrate the anonymous user's existing preference vector and history to
   their new account on signup — Supabase supports linking an anonymous
   session to a permanent account, so this shouldn't require rebuilding the
   vector from scratch. Confirm this linking flow works before considering
-  the migration done, don't just assume it carries over. (Note: since real
-  anonymous Supabase auth isn't built yet either — see Phase 1 status above
-  — this phase may need to absorb that work too, not just the
-  anonymous→permanent migration.)
+  the migration done, don't just assume it carries over.
 - Store past recommendations + like history in Supabase, tied to the
   now-permanent user ID.
 - Loading states, error states (no images found, CLIP/LLM failure, auth
@@ -306,7 +306,7 @@ UI polish. Phase 1 cannot be cut — it's the entire product.
   an offline script, and nothing has been deployed to Render yet to
   actually test this.
 - **Anonymous auth persistence** — not yet applicable; real Supabase
-  anonymous auth isn't built (Phase 1 gap above). The current local-id
+  anonymous auth is Phase 2 scope now (section 4). The current local-id
   stand-in's persistence has been informally verified (survives app
   restarts, per section 9's dev-reset notes) but that's not the same
   guarantee.
