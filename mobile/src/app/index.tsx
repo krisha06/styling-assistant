@@ -1,98 +1,53 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Redirect, router } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Pressable } from 'react-native';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
-  return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+import { Spacing } from '@/constants/theme';
+import { resetAnonymousUserId } from '@/services/anonymous-user';
+import { getHasOnboarded, resetHasOnboarded } from '@/services/onboarding-status';
 
 export default function HomeScreen() {
+  const [hasOnboarded, setHasOnboarded] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getHasOnboarded().then(setHasOnboarded);
+  }, []);
+
+  if (hasOnboarded === null) {
+    return (
+      <ThemedView style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" />
+      </ThemedView>
+    );
+  }
+
+  if (!hasOnboarded) {
+    return <Redirect href="/onboarding" />;
+  }
+
   return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
+    <ThemedView style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.two }}>
+      <ThemedText type="subtitle">Onboarding complete</ThemedText>
+      <Pressable onPress={() => router.push('/upload')} style={{ marginTop: Spacing.two }}>
+        <ThemedView type="backgroundSelected" style={{ borderRadius: Spacing.three, paddingVertical: Spacing.three, paddingHorizontal: Spacing.four }}>
+          <ThemedText>Upload a clothing item</ThemedText>
+        </ThemedView>
+      </Pressable>
+      {__DEV__ && (
+        <Pressable
+          onPress={async () => {
+            await resetHasOnboarded();
+            await resetAnonymousUserId();
+            setHasOnboarded(false);
+          }}
+          style={{ marginTop: Spacing.four }}>
+          <ThemedText type="small" themeColor="textSecondary">
+            [dev] Reset onboarding (new test user)
           </ThemedText>
-        </ThemedView>
-
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
+        </Pressable>
+      )}
     </ThemedView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
-  },
-  title: {
-    textAlign: 'center',
-  },
-  code: {
-    textTransform: 'uppercase',
-  },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
-  },
-});

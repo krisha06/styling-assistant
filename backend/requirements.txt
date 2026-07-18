@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+requests
+python-dotenv
+supabase
+numpy
+torch
+transformers
+Pillow
+python-multipart
+google-genai
