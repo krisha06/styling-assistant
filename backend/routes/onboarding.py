@@ -1,56 +1,88 @@
 import logging
+import random
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 
-from services.onboarding_deck import get_onboarding_deck, get_onboarding_image
-from services.preference_vector import update_preference_vector
+from services.auth import get_current_user_id
+from services.clip import embed_image_bytes
+from services.onboarding_deck import get_onboarding_deck
+from services.preference_vector import get_preference_vector, update_preference_vector
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-class OnboardingDeckItem(BaseModel):
-    image_id: str
-    image_url: str
-    tags: list[str]
+DEV_SEED_COUNT = 15
 
 
-class OnboardingDeckResponse(BaseModel):
-    deck: list[OnboardingDeckItem]
-
-
-class OnboardingSwipeRequest(BaseModel):
-    user_id: str
-    image_id: str
-    liked: bool
-
-
-class OnboardingSwipeResponse(BaseModel):
+class OnboardingPhotoUploadResponse(BaseModel):
     status: str
+    processed: int
+    total: int
 
 
-@router.post("/onboarding-deck", response_model=OnboardingDeckResponse)
-def onboarding_deck() -> OnboardingDeckResponse:
-    return OnboardingDeckResponse(deck=get_onboarding_deck())
+class OnboardingDevSeedResponse(BaseModel):
+    status: str
+    processed: int
 
 
-@router.post("/onboarding-swipe", response_model=OnboardingSwipeResponse)
-def onboarding_swipe(payload: OnboardingSwipeRequest) -> OnboardingSwipeResponse:
-    image = get_onboarding_image(payload.image_id)
-    if image is None:
-        raise HTTPException(status_code=404, detail=f"Unknown onboarding image_id: {payload.image_id}")
+class OnboardingStatusResponse(BaseModel):
+    has_onboarded: bool
 
-    # Per CLAUDE.md section 1 point 2: only liked embeddings are averaged
-    # into the preference vector. Passes are acknowledged but ignored.
-    if not payload.liked:
-        return OnboardingSwipeResponse(status="ok")
 
-    try:
-        update_preference_vector(payload.user_id, image["embedding"])
-    except Exception:
-        logger.exception("Failed to update preference vector for user_id=%s", payload.user_id)
-        raise HTTPException(status_code=500, detail="Failed to update preference vector")
+@router.post("/onboarding-photo-upload", response_model=OnboardingPhotoUploadResponse)
+async def onboarding_photo_upload(
+    images: list[UploadFile] = File(...),
+    user_id: str = Depends(get_current_user_id),
+) -> OnboardingPhotoUploadResponse:
+    processed = 0
+    for image in images:
+        try:
+            image_bytes = await image.read()
+            embedding = embed_image_bytes(image_bytes)
+            update_preference_vector(user_id, embedding)
+            processed += 1
+        except Exception:
+            logger.exception(
+                "Failed to fold onboarding photo %r into preference vector for user_id=%s",
+                image.filename,
+                user_id,
+            )
+            continue
 
-    return OnboardingSwipeResponse(status="ok")
+    return OnboardingPhotoUploadResponse(status="ok", processed=processed, total=len(images))
+
+
+# Dev/testing-only: lets manual QA skip hand-picking 15 photos every time.
+# Reuses the onboarding pool's precomputed embeddings directly (no download
+# or re-embedding), so it's instant — functionally the same as the old
+# swipe-onboarding endpoint's per-swipe fold-in, just batched and randomized.
+# Not part of the production API contract (CLAUDE.md section 3) — pull this
+# before any real deploy, same as the CORS allow_origins=["*"] dev shortcut
+# in main.py. Still requires a real verified session, same as every other
+# route, so it exercises the real auth path too.
+@router.post("/onboarding-dev-seed", response_model=OnboardingDevSeedResponse)
+def onboarding_dev_seed(user_id: str = Depends(get_current_user_id)) -> OnboardingDevSeedResponse:
+    pool = get_onboarding_deck()
+    sample = random.sample(pool, k=min(DEV_SEED_COUNT, len(pool)))
+
+    processed = 0
+    for image in sample:
+        try:
+            update_preference_vector(user_id, image["embedding"])
+            processed += 1
+        except Exception:
+            logger.exception(
+                "Dev-seed failed to fold image_id=%s into preference vector for user_id=%s",
+                image["image_id"],
+                user_id,
+            )
+            continue
+
+    return OnboardingDevSeedResponse(status="ok", processed=processed)
+
+
+@router.get("/onboarding-status", response_model=OnboardingStatusResponse)
+def onboarding_status(user_id: str = Depends(get_current_user_id)) -> OnboardingStatusResponse:
+    return OnboardingStatusResponse(has_onboarded=get_preference_vector(user_id) is not None)

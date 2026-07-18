@@ -1,12 +1,6 @@
 import Constants from 'expo-constants';
 
-import { getAnonymousUserId } from '@/services/anonymous-user';
-
-export type OnboardingDeckItem = {
-  image_id: string;
-  image_url: string;
-  tags: string[];
-};
+import { getAccessToken } from '@/services/auth';
 
 const DEV_BACKEND_PORT = 8000;
 
@@ -24,21 +18,13 @@ function inferDevApiBaseUrl(): string {
 
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? inferDevApiBaseUrl();
 
-export async function getOnboardingDeck(): Promise<OnboardingDeckItem[]> {
-  const res = await fetch(`${API_BASE_URL}/api/onboarding-deck`, { method: 'POST' });
-  if (!res.ok) throw new Error(`onboarding-deck failed: ${res.status}`);
-  const { deck } = await res.json();
-  return deck;
-}
-
-export async function postOnboardingSwipe(imageId: string, liked: boolean): Promise<void> {
-  const userId = await getAnonymousUserId();
-  const res = await fetch(`${API_BASE_URL}/api/onboarding-swipe`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, image_id: imageId, liked }),
-  });
-  if (!res.ok) throw new Error(`onboarding-swipe failed: ${res.status}`);
+// Every route now derives user_id from this token server-side
+// (backend/services/auth.py) instead of trusting a client-supplied
+// user_id field — see CLAUDE.md section 3.
+async function authHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+  const token = await getAccessToken();
+  if (!token) throw new Error('Not signed in');
+  return { Authorization: `Bearer ${token}`, ...extra };
 }
 
 // Thrown instead of a bare Error for backend statuses that deserve a
@@ -54,14 +40,61 @@ function throwForStatus(res: Response, action: string): void {
   if (!res.ok) throw new Error(`${action} failed: ${res.status}`);
 }
 
+export async function getOnboardingStatus(): Promise<boolean> {
+  const res = await fetch(`${API_BASE_URL}/api/onboarding-status`, {
+    method: 'GET',
+    headers: await authHeaders(),
+  });
+  throwForStatus(res, 'onboarding-status');
+  const { has_onboarded } = await res.json();
+  return has_onboarded;
+}
+
+export type OnboardingUploadResult = {
+  processed: number;
+  total: number;
+};
+
+// Embeds each photo via CLIP and folds it into the running-average
+// preference vector — same fold-in mechanism sendRecommendationFeedback
+// already uses, just via uploaded files instead of URLs.
+export async function uploadOnboardingPhotos(uris: string[]): Promise<OnboardingUploadResult> {
+  const formData = new FormData();
+  for (const uri of uris) {
+    const filename = uri.split('/').pop() ?? 'photo.jpg';
+    const extensionMatch = /\.(\w+)$/.exec(filename);
+    const mimeType = extensionMatch ? `image/${extensionMatch[1].toLowerCase()}` : 'image/jpeg';
+    formData.append('images', { uri, name: filename, type: mimeType } as unknown as Blob);
+  }
+
+  // No explicit Content-Type — RN sets the multipart boundary itself.
+  const res = await fetch(`${API_BASE_URL}/api/onboarding-photo-upload`, {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: formData,
+  });
+  throwForStatus(res, 'onboarding-photo-upload');
+  return res.json();
+}
+
+// Dev/testing-only shortcut — folds 15 random precomputed pool embeddings
+// straight into the vector, skipping the manual photo picker. Not part of
+// the production API contract (CLAUDE.md section 3).
+export async function seedOnboardingForDev(): Promise<{ processed: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/onboarding-dev-seed`, {
+    method: 'POST',
+    headers: await authHeaders(),
+  });
+  throwForStatus(res, 'onboarding-dev-seed');
+  return res.json();
+}
+
 export type AnalyzeItemResult = {
   item_description: string;
   embedding_id: string;
 };
 
 export async function analyzeItem(imageUri: string): Promise<AnalyzeItemResult> {
-  const userId = await getAnonymousUserId();
-
   const filename = imageUri.split('/').pop() ?? 'photo.jpg';
   const extensionMatch = /\.(\w+)$/.exec(filename);
   const mimeType = extensionMatch ? `image/${extensionMatch[1].toLowerCase()}` : 'image/jpeg';
@@ -69,11 +102,10 @@ export async function analyzeItem(imageUri: string): Promise<AnalyzeItemResult> 
   const formData = new FormData();
   // RN's FormData accepts { uri, name, type } in place of a Blob/File.
   formData.append('image', { uri: imageUri, name: filename, type: mimeType } as unknown as Blob);
-  formData.append('user_id', userId);
 
-  // No explicit Content-Type header — RN sets the multipart boundary itself.
   const res = await fetch(`${API_BASE_URL}/api/analyze-item`, {
     method: 'POST',
+    headers: await authHeaders(),
     body: formData,
   });
   throwForStatus(res, 'analyze-item');
@@ -87,11 +119,10 @@ export type Concept = {
 };
 
 export async function generateConcepts(itemDescription: string): Promise<Concept[]> {
-  const userId = await getAnonymousUserId();
   const res = await fetch(`${API_BASE_URL}/api/generate-concepts`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ item_description: itemDescription, user_id: userId }),
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ item_description: itemDescription }),
   });
   throwForStatus(res, 'generate-concepts');
   const { concepts } = await res.json();
@@ -111,11 +142,10 @@ export type Recommendation = {
 };
 
 export async function buildRecommendations(concepts: Concept[]): Promise<Recommendation[]> {
-  const userId = await getAnonymousUserId();
   const res = await fetch(`${API_BASE_URL}/api/build-recommendations`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ concepts, user_id: userId }),
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ concepts }),
   });
   throwForStatus(res, 'build-recommendations');
   const { recommendations } = await res.json();
@@ -127,11 +157,10 @@ export async function buildRecommendations(concepts: Concept[]): Promise<Recomme
 // liked card already has in hand, and the backend re-embeds each one via
 // CLIP and folds it into the running-average preference vector.
 export async function sendRecommendationFeedback(imageUrls: string[]): Promise<void> {
-  const userId = await getAnonymousUserId();
   const res = await fetch(`${API_BASE_URL}/api/recommendation-feedback`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, image_urls: imageUrls }),
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ image_urls: imageUrls }),
   });
   throwForStatus(res, 'recommendation-feedback');
 }

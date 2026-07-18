@@ -1,8 +1,9 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from services.auth import get_current_user_id
 from services.recommendations import build_recommendations
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,6 @@ class ConceptInput(BaseModel):
 
 class BuildRecommendationsRequest(BaseModel):
     concepts: list[ConceptInput]
-    user_id: str
 
 
 class ImageResponse(BaseModel):
@@ -38,12 +38,14 @@ class BuildRecommendationsResponse(BaseModel):
 
 
 @router.post("/build-recommendations", response_model=BuildRecommendationsResponse)
-def build_recommendations_route(payload: BuildRecommendationsRequest) -> BuildRecommendationsResponse:
+def build_recommendations_route(
+    payload: BuildRecommendationsRequest, user_id: str = Depends(get_current_user_id)
+) -> BuildRecommendationsResponse:
     try:
         concepts = [c.model_dump() for c in payload.concepts]
         recommendations = build_recommendations(concepts)
     except Exception:
-        logger.exception("Failed to build recommendations for user_id=%s", payload.user_id)
+        logger.exception("Failed to build recommendations for user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="Failed to build recommendations")
 
     return BuildRecommendationsResponse(
