@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from google.genai.errors import ClientError, ServerError
 
 RATE_LIMIT_MESSAGE = "We're getting a lot of requests right now — please try again in a few minutes."
-OVERLOADED_MESSAGE = "The description service is temporarily overloaded — please try again."
+OVERLOADED_MESSAGE = "Sorry for the inconvenience — the description service is temporarily overloaded. Please try again later."
 
 
 def raise_for_gemini_error(e: Exception, logger: logging.Logger, user_id: str, action: str) -> NoReturn:

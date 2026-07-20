@@ -42,7 +42,12 @@ export default function LoginScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <ThemedText type="subtitle">{mode === 'signup' ? 'Sign up' : 'Log in'}</ThemedText>
+      <ThemedText type="title">{mode === 'signup' ? 'Sign up' : 'Log in'}</ThemedText>
+      <ThemedText type="default" themeColor="textSecondary" style={styles.tagline}>
+        {mode === 'signup'
+          ? "Let's get your style profile started."
+          : 'Welcome back.'}
+      </ThemedText>
 
       <TextInput
         value={email}
@@ -78,7 +83,7 @@ export default function LoginScreen() {
       </Pressable>
 
       {error && (
-        <ThemedText type="small" themeColor="textSecondary" style={styles.status}>
+        <ThemedText type="small" themeColor="error" style={styles.status}>
           {error}
         </ThemedText>
       )}
@@ -108,6 +113,10 @@ const styles = StyleSheet.create({
   toggleLink: {
     textAlign: 'center',
     marginTop: Spacing.two,
+  },
+  tagline: {
+    marginTop: -Spacing.one,
+    marginBottom: Spacing.two,
   },
   status: {
     textAlign: 'center',

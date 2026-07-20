@@ -120,7 +120,7 @@ export default function OnboardingScreen() {
       )}
 
       {error && (
-        <ThemedText type="small" themeColor="textSecondary" style={styles.status}>
+        <ThemedText type="small" themeColor="error" style={styles.status}>
           {error}
         </ThemedText>
       )}

@@ -63,6 +63,16 @@ export default function HomeScreen() {
           <ThemedText>Upload a clothing item</ThemedText>
         </ThemedView>
       </Pressable>
+      <Pressable onPress={() => router.push('/onboarding')}>
+        <ThemedText type="small" themeColor="textSecondary">
+          Add more outfits
+        </ThemedText>
+      </Pressable>
+      <Pressable onPress={() => router.push('/history')}>
+        <ThemedText type="small" themeColor="textSecondary">
+          Past recommendations
+        </ThemedText>
+      </Pressable>
       <Pressable onPress={() => signOut().catch(() => {})} style={{ marginTop: Spacing.four }}>
         <ThemedText type="small" themeColor="textSecondary">
           Log out
