@@ -1,8 +1,9 @@
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from services.auth import get_current_user_id
 from services.concepts import generate_concepts
 from services.gemini_errors import raise_for_gemini_error
 from services.taste_summary import get_taste_summary
@@ -14,7 +15,6 @@ router = APIRouter()
 
 class GenerateConceptsRequest(BaseModel):
     item_description: str
-    user_id: str
 
 
 class ConceptResponse(BaseModel):
@@ -28,13 +28,15 @@ class GenerateConceptsResponse(BaseModel):
 
 
 @router.post("/generate-concepts", response_model=GenerateConceptsResponse)
-def generate_concepts_route(payload: GenerateConceptsRequest) -> GenerateConceptsResponse:
-    taste_summary = get_taste_summary(payload.user_id)
+def generate_concepts_route(
+    payload: GenerateConceptsRequest, user_id: str = Depends(get_current_user_id)
+) -> GenerateConceptsResponse:
+    taste_summary = get_taste_summary(user_id)
 
     try:
         concepts = generate_concepts(payload.item_description, taste_summary)
     except Exception as e:
-        raise_for_gemini_error(e, logger, payload.user_id, "generate concepts")
+        raise_for_gemini_error(e, logger, user_id, "generate concepts")
 
     return GenerateConceptsResponse(
         concepts=[

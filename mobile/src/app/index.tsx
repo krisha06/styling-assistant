@@ -5,17 +5,41 @@ import { ActivityIndicator, Pressable } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
-import { resetAnonymousUserId } from '@/services/anonymous-user';
-import { getHasOnboarded, resetHasOnboarded } from '@/services/onboarding-status';
+import { getOnboardingStatus } from '@/services/api';
+import { signOut } from '@/services/auth';
+import { supabase } from '@/services/supabase';
+
+type Status = 'loading' | 'no-session' | 'not-onboarded' | 'ready';
 
 export default function HomeScreen() {
-  const [hasOnboarded, setHasOnboarded] = useState<boolean | null>(null);
+  const [status, setStatus] = useState<Status>('loading');
 
   useEffect(() => {
-    getHasOnboarded().then(setHasOnboarded);
+    checkStatus();
+    // Reacts to sign-out (or sign-in) happening anywhere in the app —
+    // e.g. logging out redirects here immediately without a manual navigate.
+    const { data: listener } = supabase.auth.onAuthStateChange(() => {
+      checkStatus();
+    });
+    return () => listener.subscription.unsubscribe();
   }, []);
 
-  if (hasOnboarded === null) {
+  async function checkStatus() {
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) {
+      setStatus('no-session');
+      return;
+    }
+    try {
+      const hasOnboarded = await getOnboardingStatus();
+      setStatus(hasOnboarded ? 'ready' : 'not-onboarded');
+    } catch {
+      // Expired/invalid token, etc. — treat as signed out rather than getting stuck.
+      setStatus('no-session');
+    }
+  }
+
+  if (status === 'loading') {
     return (
       <ThemedView style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator size="large" />
@@ -23,7 +47,11 @@ export default function HomeScreen() {
     );
   }
 
-  if (!hasOnboarded) {
+  if (status === 'no-session') {
+    return <Redirect href="/login" />;
+  }
+
+  if (status === 'not-onboarded') {
     return <Redirect href="/onboarding" />;
   }
 
@@ -35,19 +63,21 @@ export default function HomeScreen() {
           <ThemedText>Upload a clothing item</ThemedText>
         </ThemedView>
       </Pressable>
-      {__DEV__ && (
-        <Pressable
-          onPress={async () => {
-            await resetHasOnboarded();
-            await resetAnonymousUserId();
-            setHasOnboarded(false);
-          }}
-          style={{ marginTop: Spacing.four }}>
-          <ThemedText type="small" themeColor="textSecondary">
-            [dev] Reset onboarding (new test user)
-          </ThemedText>
-        </Pressable>
-      )}
+      <Pressable onPress={() => router.push('/onboarding')}>
+        <ThemedText type="small" themeColor="textSecondary">
+          Add more outfits
+        </ThemedText>
+      </Pressable>
+      <Pressable onPress={() => router.push('/history')}>
+        <ThemedText type="small" themeColor="textSecondary">
+          Past recommendations
+        </ThemedText>
+      </Pressable>
+      <Pressable onPress={() => signOut().catch(() => {})} style={{ marginTop: Spacing.four }}>
+        <ThemedText type="small" themeColor="textSecondary">
+          Log out
+        </ThemedText>
+      </Pressable>
     </ThemedView>
   );
 }
