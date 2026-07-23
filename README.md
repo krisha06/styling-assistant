@@ -73,12 +73,14 @@ A few decisions shaped what this app is...
 
 ## Known Limitations & What's Next
 
+- Getting real user feedback from friends and making improvements
+- Improving UI to be more intuitive
 - Backend runs locally on my own laptop, not deployed, no production server yet, so it's not usable outside of local dev.
 - Personalization strength over sustained use hasn't been measured yet, the preference vector is a running average, not a trained model, and whether it noticeably improves recommendations over time is an open question.
 - Image sourcing is dependent on SerpApi rate limits, exploring a caching layer to reduce redundant calls.
 - Reference photos are picked as the first valid SerpApi result per item, not ranked by CLIP similarity — a speed/quality tradeoff that may get revisited.
 - Would like to add lightweight explainability (e.g. "you're drawn to warm tones and structured silhouettes") using the embedding clusters that already exist under the hood.
-- Getting real user feedback and making improvements
+
 
 ---
 
