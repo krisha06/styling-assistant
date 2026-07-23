@@ -4,7 +4,7 @@
 
 While shopping, my friends and I always find ourselves asking "Will I actually wear this?". I know this rings true for many people, no one wants clothing to just sit unused in their closet for a year. This app solves this issue, allowing you to quickly gauge whether or not you will wear a piece with a personalized moodboard. Upload pictures of your favorite outfits, either your own or from online or from a friend! Then, find pieces while thrifting, or at the mall and upload it for personalized style recommendations. Tada! No more uncertainty, no more guesswork, jsut beautiful outfits!
 
-Built using Claude Code June 2026-Present as a React Native / Expo mobile app.
+Built from June 2026-Present as a React Native / Expo mobile app.
 
 ---
 
@@ -68,7 +68,7 @@ A few decisions shaped what this app is...
 | ML / Embeddings | CLIP |
 | Image description generation | Gemini |
 | Image sourcing | SerpApi (Google Images) |
-
+| AI Tool | Claude Code |
 ---
 
 ## Known Limitations & What's Next
