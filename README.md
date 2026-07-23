@@ -10,7 +10,7 @@ Built using Claude Code June 2026-Present as a React Native / Expo mobile app.
 
 ## Demo
 
-<video src="StyleAppDemo.mp4" controls width="400"></video>
+https://github.com/user-attachments/assets/0a8c6be9-bcea-4c94-8270-948bb442f3f4
 
 ---
 
